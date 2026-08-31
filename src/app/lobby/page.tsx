@@ -7,13 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Users, Plus, ArrowRight } from "lucide-react";
+import { Users, Plus, ArrowRight, Trophy, History } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 
 export default function Lobby() {
   const router = useRouter();
   const [playerName, setPlayerName] = useState("");
   const [roomCode, setRoomCode] = useState("");
+  const [history, setHistory] = useState<any[]>([]);
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -25,8 +26,21 @@ export default function Lobby() {
       // Pega o nome verdadeiro salvo no metadata
       setPlayerName(data.session.user.user_metadata.username || "Jogador");
     };
+
+    const fetchHistory = async () => {
+      const { data } = await supabase
+        .from("match_history")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (data) {
+        setHistory(data);
+      }
+    };
+
     fetchUser();
-  }, [router, supabase]);
+    fetchHistory();
+  }, [router]);
 
   const handleCreateRoom = async () => {
     // Gera um código aleatório de 4 letras para a sala
@@ -124,6 +138,45 @@ export default function Lobby() {
             </form>
           </CardContent>
         </Card>
+      </motion.div>
+
+      {/* Histórico de Partidas */}
+      <motion.div
+        initial={{ y: 20, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.5, delay: 0.2 }}
+        className="w-full max-w-md mt-8 space-y-4"
+      >
+        <div className="flex items-center gap-2 text-white/80">
+          <History className="w-5 h-5" />
+          <h2 className="text-xl font-bold">Últimas Partidas</h2>
+        </div>
+
+        {history.length === 0 ? (
+          <div className="text-zinc-500 text-center py-4 bg-black/40 rounded-xl border border-white/5">
+            Nenhuma partida foi jogada ainda.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {history.map((match) => (
+              <div key={match.id} className="bg-black/40 p-4 rounded-xl border border-white/10 flex flex-col gap-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-zinc-400 text-xs">Sala: {match.room_id}</span>
+                  <span className="text-zinc-500 text-xs">
+                    {new Date(match.created_at).toLocaleDateString()}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Trophy className="w-4 h-4 text-yellow-500" />
+                  <span className="text-white font-bold text-lg">{match.winner_name} venceu!</span>
+                </div>
+                <div className="text-sm text-zinc-400">
+                  {match.players_summary.map((p: any) => `${p.name} (${p.score})`).join(" • ")}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </motion.div>
     </div>
   );

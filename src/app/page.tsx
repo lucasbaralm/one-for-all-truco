@@ -63,7 +63,7 @@ export default function Home() {
         });
         
         if (error) {
-          setErrorMsg("Erro ao criar conta. Esse nome já pode estar em uso.");
+          setErrorMsg(`Erro: ${error.message}`);
           setLoading(false);
           return;
         }

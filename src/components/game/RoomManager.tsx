@@ -71,12 +71,27 @@ export default function RoomManager({ roomId }: { roomId: string }) {
           
           setStatus("waiting");
         })
+        // ← CRITICAL: guests listen for the host's start signal
+        .on("broadcast", { event: "start_game" }, () => {
+          setStatus("playing");
+        })
+        // Also transition if a sync_state arrives while still in lobby
+        // (handles: guest refreshes page after game already started)
+        .on("broadcast", { event: "sync_state" }, () => {
+          setStatus((prev) => prev === "waiting" ? "playing" : prev);
+        })
         .subscribe(async (status: string) => {
           if (status === "SUBSCRIBED") {
             await channel.track({
               name: name,
               joinedAt: new Date().toISOString(),
             });
+
+            // Check if a game is already in progress (late joiner / page refresh)
+            const { data } = await supabase.from('rooms').select('state').eq('id', roomId).single();
+            if (data?.state) {
+              setStatus("playing");
+            }
           }
         });
     };
@@ -87,6 +102,7 @@ export default function RoomManager({ roomId }: { roomId: string }) {
       if (channel) supabase.removeChannel(channel);
     };
   }, [roomId, router]);
+
 
   const handleStartGame = () => {
     // Apenas o Host pode iniciar

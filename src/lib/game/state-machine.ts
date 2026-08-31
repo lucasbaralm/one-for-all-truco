@@ -1,6 +1,6 @@
 import { Card, generateDeck, shuffleDeck, getWinningCardIndex } from './rules';
 
-export type GamePhase = 'waiting' | 'betting' | 'playing' | 'round_end' | 'game_over';
+export type GamePhase = 'waiting' | 'shuffling' | 'betting' | 'playing' | 'round_end' | 'game_over';
 
 export interface PlayerState {
   id: string;
@@ -9,6 +9,7 @@ export interface PlayerState {
   bet: number | null;
   tricks: number;
   cards: Card[];
+  wonCards: Card[][]; // Bolos de vazas ganhas no round atual
 }
 
 export interface GameState {
@@ -36,27 +37,23 @@ export function createInitialState(playerPresence: { id: string, name: string }[
       bet: null,
       tricks: 0,
       cards: [],
+      wonCards: [],
     })),
     currentRoundCards: 1, // Começa com 1 carta
     roundDirection: 'up',
     dealerIndex: 0, // O host começa dando as cartas
-    currentPlayerIndex: 1 % playerPresence.length, // Quem começa falando é o próximo depois do dealer
+    currentPlayerIndex: 0, // No shuffling, quem age é o dealer
     vira: null,
     tableCards: [],
     maxCardsLimit: 5, // Sobe até 5 cartas (máximo padrão da Fodinha rápida)
   };
 }
 
-/**
- * Inicia uma nova rodada (distribui cartas, vira, zera apostas).
- */
 export function startNextRound(state: GameState): GameState {
-  const deck = shuffleDeck(generateDeck());
   const playersAlive = state.players; // Sem eliminação por vidas
   
   // Descobre o próximo dealer
   const nextDealerIndex = (state.dealerIndex + 1) % state.players.length;
-  const nextPlayerIndex = (nextDealerIndex + 1) % state.players.length;
 
   // Calcula se sobe a quantidade de cartas
   let newCardCount = state.currentRoundCards;
@@ -71,26 +68,50 @@ export function startNextRound(state: GameState): GameState {
     }
   }
 
-  // Distribui as cartas
-  let cardIndex = 0;
+  // Prepara os jogadores (zera cartas, apostas e vazas)
   const newPlayers = state.players.map(p => {
-    const hand = deck.slice(cardIndex, cardIndex + newCardCount);
-    cardIndex += newCardCount;
-    return { ...p, cards: hand, bet: null, tricks: 0 };
+    return { ...p, cards: [], wonCards: [], bet: null, tricks: 0 };
+  });
+
+  return {
+    ...state,
+    phase: 'shuffling', // Agora aguarda o dealer embaralhar e distribuir
+    players: newPlayers,
+    currentRoundCards: newCardCount,
+    roundDirection: 'up',
+    dealerIndex: nextDealerIndex,
+    currentPlayerIndex: nextDealerIndex, // Apenas o dealer age nesta fase
+    vira: null,
+    tableCards: [],
+  };
+}
+
+/**
+ * Ação manual do dealer de embaralhar e distribuir as cartas.
+ */
+export function handleShuffleAndDeal(state: GameState, playerId: string): GameState {
+  if (state.phase !== 'shuffling') return state;
+  const currentPlayer = state.players[state.currentPlayerIndex];
+  if (currentPlayer.id !== playerId) return state; // Apenas o dealer
+  
+  const deck = shuffleDeck(generateDeck());
+  let cardIndex = 0;
+  
+  const newPlayers = state.players.map(p => {
+    const hand = deck.slice(cardIndex, cardIndex + state.currentRoundCards);
+    cardIndex += state.currentRoundCards;
+    return { ...p, cards: hand };
   });
 
   const vira = deck[cardIndex];
+  const nextPlayerIndex = (state.dealerIndex + 1) % state.players.length;
 
   return {
     ...state,
     phase: 'betting',
     players: newPlayers,
-    currentRoundCards: newCardCount,
-    roundDirection: 'up',
-    dealerIndex: nextDealerIndex,
-    currentPlayerIndex: nextPlayerIndex,
     vira,
-    tableCards: [],
+    currentPlayerIndex: nextPlayerIndex,
   };
 }
 
@@ -139,73 +160,71 @@ export function handlePlayCard(state: GameState, playerId: string, cardIndexInHa
   if (currentPlayer.id !== playerId) return state;
 
   const cardPlayed = currentPlayer.cards[cardIndexInHand];
-  
-  // Remove a carta da mão do jogador
+
+  // Remove a carta da mão do jogador (deep copy para evitar mutações)
   const newPlayers = state.players.map(p => {
     if (p.id === playerId) {
-      const newHand = [...p.cards];
-      newHand.splice(cardIndexInHand, 1);
+      const newHand = p.cards.filter((_, idx) => idx !== cardIndexInHand);
       return { ...p, cards: newHand };
     }
     return p;
   });
 
   const newTableCards = [...state.tableCards, { playerId, card: cardPlayed }];
-  
-  // Verifica se a rodada de mesa (vaza) acabou (todos jogaram 1 carta)
+
+  // Verifica se a vaza acabou (todos jogaram 1 carta)
   if (newTableCards.length === state.players.length) {
-    // Descobre quem ganhou a vaza
     const winningCardIdx = getWinningCardIndex(newTableCards.map(tc => tc.card), state.vira!);
     const winnerId = newTableCards[winningCardIdx].playerId;
-    
-    // Dá 1 trick pro vencedor
-    const playersAfterTrick = newPlayers.map(p => 
-      p.id === winnerId ? { ...p, tricks: p.tricks + 1 } : p
-    );
+    const winnerIndex = newPlayers.findIndex(p => p.id === winnerId);
 
-    // O vencedor é o próximo a jogar
-    const winnerIndex = playersAfterTrick.findIndex(p => p.id === winnerId);
+    // Atualiza tricks e wonCards do vencedor (IMUTABLE — cria novo array)
+    const playersAfterTrick = newPlayers.map((p, idx) => {
+      if (idx === winnerIndex) {
+        return {
+          ...p,
+          tricks: p.tricks + 1,
+          wonCards: [...p.wonCards, newTableCards.map(tc => tc.card)], // deep push
+        };
+      }
+      return p;
+    });
 
-    // Verifica se acabaram as cartas da mão de todo mundo
+    // Verifica se o round acabou (sem cartas nas mãos)
     const outOfCards = playersAfterTrick.every(p => p.cards.length === 0);
 
     if (outOfCards) {
-      // Fim da rodada total! Calcula pontuação e volta pra waiting
+      // Calcula pontuação: quem errou a aposta recebe dano
       const playersWithScores = playersAfterTrick.map(p => {
-        let scoreChange = 0;
-        if (p.bet !== null) {
-          if (p.bet === p.tricks) {
-            scoreChange = 0; // Acertou
-          } else {
-            scoreChange = Math.abs(p.bet - p.tricks); // Errou (Dano)
-          }
-        }
-        return { ...p, score: p.score + scoreChange };
+        const damage = p.bet !== null && p.bet !== p.tricks
+          ? Math.abs(p.bet - p.tricks)
+          : 0;
+        return { ...p, score: p.score + damage };
       });
 
       return {
         ...state,
         phase: 'round_end',
         players: playersWithScores,
-        tableCards: newTableCards,
+        tableCards: [], // Limpa a mesa
       };
     }
 
+    // Ainda há cartas: limpa mesa, vencedor joga primeiro
     return {
       ...state,
       players: playersAfterTrick,
-      tableCards: [], // Limpa a mesa pra próxima vaza
-      currentPlayerIndex: winnerIndex
+      tableCards: [],
+      currentPlayerIndex: winnerIndex,
     };
   }
 
-  // Ainda não acabou a vaza, passa pro próximo
+  // Ainda não acabou a vaza: próximo jogador
   const nextPlayerIndex = (state.currentPlayerIndex + 1) % state.players.length;
-  
   return {
     ...state,
     players: newPlayers,
     tableCards: newTableCards,
-    currentPlayerIndex: nextPlayerIndex
+    currentPlayerIndex: nextPlayerIndex,
   };
 }

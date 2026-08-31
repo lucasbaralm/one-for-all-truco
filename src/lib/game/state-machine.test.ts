@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createInitialState, startNextRound, handleBet, handlePlayCard, GameState } from './state-machine';
+import { createInitialState, startNextRound, handleBet, handlePlayCard, handleShuffleAndDeal, GameState } from './state-machine';
 import { PlayerPresence } from '@/components/game/RoomManager';
 import { Card } from './rules';
 
@@ -23,6 +23,11 @@ describe('State Machine - Setup', () => {
     let state = createInitialState(mockPlayers);
     state = startNextRound(state);
     
+    expect(state.phase).toBe('shuffling');
+
+    // Inicialmente dealer era 0. startNextRound() faz nextDealerIndex ser 1 (Bob - id '2')
+    state = handleShuffleAndDeal(state, '2'); 
+    
     expect(state.phase).toBe('betting');
     expect(state.currentRoundCards).toBe(1);
     expect(state.players[0].cards.length).toBe(1);
@@ -39,7 +44,10 @@ describe('State Machine - Gameplay Flow', () => {
 
   it('should handle betting and transition to playing', () => {
     let state = createInitialState(mockPlayers);
-    state = startNextRound(state); 
+    state = startNextRound(state); // -> shuffling
+    // dealerIndex virou 1 ('p2')
+    state = handleShuffleAndDeal(state, 'p2'); // -> betting
+    
     
     // Na Fodinha, se o dealer é X, o próximo dealer é X+1 e o primeiro a jogar é o próximo do dealer (X+2)
     // Inicialmente dealer = 0.
@@ -73,8 +81,8 @@ describe('State Machine - Gameplay Flow', () => {
       vira,
       tableCards: [],
       players: [
-        { id: 'p1', name: 'P1', score: 0, cards: [p1Card], bet: 0, tricks: 0 },
-        { id: 'p2', name: 'P2', score: 0, cards: [p2Card], bet: 1, tricks: 0 }
+        { id: 'p1', name: 'P1', score: 0, cards: [p1Card], wonCards: [], bet: 0, tricks: 0 },
+        { id: 'p2', name: 'P2', score: 0, cards: [p2Card], wonCards: [], bet: 1, tricks: 0 }
       ],
       maxCardsLimit: 5
     };
@@ -120,8 +128,8 @@ describe('State Machine - Gameplay Flow', () => {
       vira,
       tableCards: [],
       players: [
-        { id: 'p1', name: 'P1', score: 5, cards: [p1Card], bet: 1, tricks: 0 },
-        { id: 'p2', name: 'P2', score: 2, cards: [p2Card], bet: 1, tricks: 0 }
+        { id: 'p1', name: 'P1', score: 5, cards: [p1Card], wonCards: [], bet: 1, tricks: 0 },
+        { id: 'p2', name: 'P2', score: 2, cards: [p2Card], wonCards: [], bet: 1, tricks: 0 }
       ],
       maxCardsLimit: 5
     };
