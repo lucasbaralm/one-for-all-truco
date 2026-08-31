@@ -9,7 +9,8 @@ describe('Rules - generateDeck', () => {
 
   it('should not contain 8, 9 or 10', () => {
     const deck = generateDeck();
-    const invalidCards = deck.filter(c => c.value === '8' || c.value === '9' || c.value === '10');
+    // Use 'any' type to check for invalid values since TS statically knows they are invalid
+    const invalidCards = deck.filter((c: any) => c.value === '8' || c.value === '9' || c.value === '10');
     expect(invalidCards.length).toBe(0);
   });
 

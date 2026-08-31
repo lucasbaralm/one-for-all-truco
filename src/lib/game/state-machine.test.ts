@@ -75,7 +75,8 @@ describe('State Machine - Gameplay Flow', () => {
       players: [
         { id: 'p1', name: 'P1', score: 0, cards: [p1Card], bet: 0, tricks: 0 },
         { id: 'p2', name: 'P2', score: 0, cards: [p2Card], bet: 1, tricks: 0 }
-      ]
+      ],
+      maxCardsLimit: 5
     };
 
     // P2 joga
@@ -121,7 +122,8 @@ describe('State Machine - Gameplay Flow', () => {
       players: [
         { id: 'p1', name: 'P1', score: 5, cards: [p1Card], bet: 1, tricks: 0 },
         { id: 'p2', name: 'P2', score: 2, cards: [p2Card], bet: 1, tricks: 0 }
-      ]
+      ],
+      maxCardsLimit: 5
     };
 
     state = handlePlayCard(state, 'p2', 0);

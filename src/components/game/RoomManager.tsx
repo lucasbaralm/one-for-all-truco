@@ -50,8 +50,9 @@ export default function RoomManager({ roomId }: { roomId: string }) {
           const state = channel.presenceState();
           const connectedPlayers: PlayerPresence[] = [];
           
-          for (const [key, presences] of Object.entries(state)) {
-            const p = presences[0] as unknown as { name: string; joinedAt: string };
+          for (const [key, presencesValue] of Object.entries(state)) {
+            const presences = presencesValue as any[];
+            const p = presences[0] as { name: string; joinedAt: string };
             connectedPlayers.push({
               id: key,
               name: p.name,
