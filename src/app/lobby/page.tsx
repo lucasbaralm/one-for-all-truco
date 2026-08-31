@@ -8,12 +8,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Users, Plus, ArrowRight } from "lucide-react";
+import { supabase } from "@/lib/supabase/client";
 
 export default function Lobby() {
   const router = useRouter();
   const [playerName, setPlayerName] = useState("");
   const [roomCode, setRoomCode] = useState("");
-  const supabase = createClient();
 
   useEffect(() => {
     const fetchUser = async () => {

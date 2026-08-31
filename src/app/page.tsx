@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spade, Heart, Club, Diamond } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { supabase } from "@/lib/supabase/client";
 
 export default function Home() {
   const [name, setName] = useState("");
@@ -18,7 +18,6 @@ export default function Home() {
   const [errorMsg, setErrorMsg] = useState("");
   const [mounted, setMounted] = useState(false);
   const router = useRouter();
-  const supabase = createClient();
 
   useEffect(() => {
     setMounted(true);
