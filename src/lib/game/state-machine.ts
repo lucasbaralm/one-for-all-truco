@@ -16,12 +16,14 @@ export interface GameState {
   phase: GamePhase;
   players: PlayerState[];
   currentRoundCards: number;
+  // Não usado: nesta variante as cartas só sobem até o limite do baralho, nunca descem.
   roundDirection: 'up' | 'down';
   dealerIndex: number;
   currentPlayerIndex: number; // De quem é a vez de falar/jogar
   vira: Card | null;
   tableCards: { playerId: string; card: Card }[];
-  maxCardsLimit: number; // Por ex: sobe até 5 cartas
+  // Não usado para limitar rounds: o teto real é ditado por generateDeck() (ver startNextRound).
+  maxCardsLimit: number;
 }
 
 /**
@@ -50,18 +52,20 @@ export function createInitialState(playerPresence: { id: string, name: string }[
 }
 
 export function startNextRound(state: GameState): GameState {
-  const playersAlive = state.players; // Sem eliminação por vidas
-  
-  // Descobre o próximo dealer
-  const nextDealerIndex = (state.dealerIndex + 1) % state.players.length;
+  // O host (dealerIndex 0) começa dando as cartas na primeira rodada da partida;
+  // depois disso o dealer roda normalmente para o próximo jogador a cada rodada.
+  const nextDealerIndex = state.phase === 'waiting'
+    ? state.dealerIndex
+    : (state.dealerIndex + 1) % state.players.length;
 
   // Calcula se sobe a quantidade de cartas
   let newCardCount = state.currentRoundCards;
-  
+
   if (state.phase !== 'waiting') {
     newCardCount++;
-    const absoluteMax = Math.floor(39 / playersAlive.length);
-    
+    // Teto real: quantas cartas por jogador cabem no baralho de 40, sobrando 1 para o vira.
+    const absoluteMax = Math.floor(39 / state.players.length);
+
     // Se a próxima rodada for exigir mais cartas do que o baralho aguenta, o jogo acaba!
     if (newCardCount > absoluteMax) {
       return { ...state, phase: 'game_over' };
@@ -120,11 +124,22 @@ export function handleShuffleAndDeal(state: GameState, playerId: string): GameSt
  */
 export function handleBet(state: GameState, playerId: string, bet: number): GameState {
   if (state.phase !== 'betting') return state;
-  
+
   const currentPlayer = state.players[state.currentPlayerIndex];
   if (currentPlayer.id !== playerId) return state;
 
-  const newPlayers = state.players.map(p => 
+  // A aposta precisa ser um valor possível de se fazer: entre 0 e a quantidade de cartas na mão.
+  if (!Number.isInteger(bet) || bet < 0 || bet > currentPlayer.cards.length) return state;
+
+  // Regra do "fechamento": quem faz a última aposta da rodada não pode escolher um valor
+  // que deixe a soma das apostas igual à quantidade de cartas da rodada — alguém tem que errar.
+  const isClosingBet = state.players.filter(p => p.bet === null).length === 1;
+  if (isClosingBet) {
+    const sumOfOtherBets = state.players.reduce((sum, p) => sum + (p.bet ?? 0), 0);
+    if (sumOfOtherBets + bet === state.currentRoundCards) return state;
+  }
+
+  const newPlayers = state.players.map(p =>
     p.id === playerId ? { ...p, bet } : p
   );
 
@@ -158,6 +173,9 @@ export function handlePlayCard(state: GameState, playerId: string, cardIndexInHa
 
   const currentPlayer = state.players[state.currentPlayerIndex];
   if (currentPlayer.id !== playerId) return state;
+
+  // Só aceita um índice que exista de fato na mão do jogador.
+  if (cardIndexInHand < 0 || cardIndexInHand >= currentPlayer.cards.length) return state;
 
   const cardPlayed = currentPlayer.cards[cardIndexInHand];
 

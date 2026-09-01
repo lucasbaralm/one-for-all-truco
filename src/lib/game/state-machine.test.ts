@@ -19,20 +19,46 @@ describe('State Machine - Setup', () => {
     expect(state.currentRoundCards).toBe(1);
   });
 
-  it('should start first round with 1 card per player', () => {
+  it('should start first round with 1 card per player, dealt by the host', () => {
     let state = createInitialState(mockPlayers);
     state = startNextRound(state);
-    
-    expect(state.phase).toBe('shuffling');
 
-    // Inicialmente dealer era 0. startNextRound() faz nextDealerIndex ser 1 (Bob - id '2')
-    state = handleShuffleAndDeal(state, '2'); 
-    
+    expect(state.phase).toBe('shuffling');
+    // O host (Alice, index 0) é sempre quem embaralha a primeira rodada da partida.
+    expect(state.dealerIndex).toBe(0);
+
+    state = handleShuffleAndDeal(state, '1');
+
     expect(state.phase).toBe('betting');
     expect(state.currentRoundCards).toBe(1);
     expect(state.players[0].cards.length).toBe(1);
     expect(state.players[1].cards.length).toBe(1);
     expect(state.vira).toBeDefined();
+  });
+
+  it('should reject shuffle attempt from a non-dealer player', () => {
+    let state = createInitialState(mockPlayers);
+    state = startNextRound(state);
+
+    const attempted = handleShuffleAndDeal(state, '2'); // Bob não é o dealer
+    expect(attempted).toBe(state); // Estado inalterado
+    expect(attempted.phase).toBe('shuffling');
+  });
+
+  it('should rotate the dealer to the next player on every round after the first', () => {
+    let state = createInitialState(mockPlayers);
+    state = startNextRound(state); // Ronda 1: dealer = Alice (0)
+    expect(state.dealerIndex).toBe(0);
+    state = handleShuffleAndDeal(state, '1');
+    state = handleBet(state, '2', 0);
+    state = handleBet(state, '1', 1);
+    state = handlePlayCard(state, '2', 0);
+    state = handlePlayCard(state, '1', 0);
+    expect(state.phase).toBe('round_end');
+
+    state = startNextRound(state); // Ronda 2: dealer roda para Bob (1)
+    expect(state.dealerIndex).toBe(1);
+    expect(state.currentRoundCards).toBe(2);
   });
 });
 
@@ -44,26 +70,28 @@ describe('State Machine - Gameplay Flow', () => {
 
   it('should handle betting and transition to playing', () => {
     let state = createInitialState(mockPlayers);
-    state = startNextRound(state); // -> shuffling
-    // dealerIndex virou 1 ('p2')
-    state = handleShuffleAndDeal(state, 'p2'); // -> betting
-    
-    
-    // Na Fodinha, se o dealer é X, o próximo dealer é X+1 e o primeiro a jogar é o próximo do dealer (X+2)
-    // Inicialmente dealer = 0.
-    // Start round -> novo dealer: 1. Primeiro a jogar: 0 (P1).
-    expect(state.currentPlayerIndex).toBe(0);
-    
-    state = handleBet(state, 'p1', 1);
-    expect(state.players[0].bet).toBe(1);
-    expect(state.phase).toBe('betting');
-    
+    state = startNextRound(state); // -> shuffling, dealer = p1 (host)
+    state = handleShuffleAndDeal(state, 'p1'); // -> betting
+
+    // Dealer é p1 (index 0), então quem aposta primeiro é p2 (index 1)
+    expect(state.currentPlayerIndex).toBe(1);
+
     state = handleBet(state, 'p2', 0);
     expect(state.players[1].bet).toBe(0);
+    expect(state.phase).toBe('betting');
+
+    // p1 é o dealer e faz a última aposta da rodada de 1 carta.
+    // Apostar 1 fecharia a soma (0 + 1 = 1 carta), então é proibido; só resta 0.
+    state = handleBet(state, 'p1', 1);
+    expect(state.players[0].bet).toBeNull(); // Aposta rejeitada, estado não mudou
+    expect(state.phase).toBe('betting');
+
+    state = handleBet(state, 'p1', 0);
+    expect(state.players[0].bet).toBe(0);
     expect(state.phase).toBe('playing');
-    
+
     // O primeiro a jogar as cartas é quem começou a apostar
-    expect(state.currentPlayerIndex).toBe(0); 
+    expect(state.currentPlayerIndex).toBe(1);
   });
 
   it('should handle playing cards and trick evaluation', () => {
@@ -71,7 +99,7 @@ describe('State Machine - Gameplay Flow', () => {
     const p1Card: Card = { suit: 'hearts', value: '4' };
     const p2Card: Card = { suit: 'spades', value: 'K' }; // K vence 4 (se não for manilha)
     const vira: Card = { suit: 'diamonds', value: '2' }; // Manilha é 3
-    
+
     let state: GameState = {
       phase: 'playing',
       currentRoundCards: 1,
@@ -95,18 +123,18 @@ describe('State Machine - Gameplay Flow', () => {
 
     // P1 joga
     state = handlePlayCard(state, 'p1', 0);
-    
+
     // A vaza acabou! O K (P2) vence o 4 (P1)
     // O P2 ganha 1 trick, e acaba a rodada (pq era round de 1 carta)
     expect(state.phase).toBe('round_end');
-    
+
     const p1Final = state.players.find(p => p.id === 'p1');
     const p2Final = state.players.find(p => p.id === 'p2');
-    
+
     expect(p2Final?.tricks).toBe(1);
     expect(p1Final?.tricks).toBe(0);
-    
-    // Cálculo de dano: 
+
+    // Cálculo de dano:
     // P2 apostou 1 e fez 1 -> Toma 0 dano
     expect(p2Final?.score).toBe(0);
     // P1 apostou 0 e fez 0 -> Toma 0 dano
@@ -118,7 +146,7 @@ describe('State Machine - Gameplay Flow', () => {
     const p1Card: Card = { suit: 'hearts', value: '7' };
     const p2Card: Card = { suit: 'spades', value: '4' };
     const vira: Card = { suit: 'diamonds', value: '2' };
-    
+
     let state: GameState = {
       phase: 'playing',
       currentRoundCards: 1,
@@ -136,13 +164,159 @@ describe('State Machine - Gameplay Flow', () => {
 
     state = handlePlayCard(state, 'p2', 0);
     state = handlePlayCard(state, 'p1', 0);
-    
+
     // P1 (7) vence P2 (4)
     // P1 apostou 1 e fez 1 = +0 dano
     // P2 apostou 1 e fez 0 = +1 dano
-    
+
     expect(state.phase).toBe('round_end');
     expect(state.players.find(p => p.id === 'p1')?.score).toBe(5); // 5 + 0
     expect(state.players.find(p => p.id === 'p2')?.score).toBe(3); // 2 + 1
+  });
+});
+
+describe('State Machine - handleBet validation', () => {
+  const baseState: GameState = {
+    phase: 'betting',
+    currentRoundCards: 2,
+    roundDirection: 'up',
+    dealerIndex: 1,
+    currentPlayerIndex: 0,
+    vira: { suit: 'diamonds', value: '4' },
+    tableCards: [],
+    players: [
+      { id: 'p1', name: 'P1', score: 0, cards: [{ suit: 'hearts', value: '5' }, { suit: 'clubs', value: '6' }], wonCards: [], bet: null, tricks: 0 },
+      { id: 'p2', name: 'P2', score: 0, cards: [{ suit: 'hearts', value: '7' }, { suit: 'clubs', value: 'Q' }], wonCards: [], bet: null, tricks: 0 },
+    ],
+    maxCardsLimit: 5,
+  };
+
+  it('should ignore a bet from a player who is not currently up', () => {
+    const next = handleBet(baseState, 'p2', 1);
+    expect(next).toBe(baseState);
+  });
+
+  it('should reject a negative bet', () => {
+    const next = handleBet(baseState, 'p1', -1);
+    expect(next).toBe(baseState);
+    expect(next.players[0].bet).toBeNull();
+  });
+
+  it('should reject a bet greater than the number of cards in hand', () => {
+    const next = handleBet(baseState, 'p1', 3); // só tem 2 cartas
+    expect(next).toBe(baseState);
+  });
+
+  it('should reject a non-integer bet', () => {
+    const next = handleBet(baseState, 'p1', 1.5);
+    expect(next).toBe(baseState);
+  });
+
+  it('should accept a valid bet within range', () => {
+    const next = handleBet(baseState, 'p1', 2);
+    expect(next.players[0].bet).toBe(2);
+  });
+
+  it('should not let the closing bettor make the total equal the round card count', () => {
+    let state = handleBet(baseState, 'p1', 1); // sobra p2, currentRoundCards = 2
+    expect(state.players[0].bet).toBe(1);
+    expect(state.currentPlayerIndex).toBe(1);
+
+    // p2 apostar 1 fecharia a soma em 2 (= currentRoundCards) -> proibido
+    const rejected = handleBet(state, 'p2', 1);
+    expect(rejected.players[1].bet).toBeNull();
+    expect(rejected.phase).toBe('betting');
+
+    // Qualquer outro valor válido é aceito
+    const accepted = handleBet(state, 'p2', 0);
+    expect(accepted.players[1].bet).toBe(0);
+    expect(accepted.phase).toBe('playing');
+  });
+
+  it('should not restrict a bet that is not the closing bet of the round', () => {
+    // p1 é o único apostando agora; mesmo que 2 feche a soma sozinho, a regra
+    // só vale para quem faz a ÚLTIMA aposta — aqui ainda falta p2 apostar depois.
+    const next = handleBet(baseState, 'p1', 2);
+    expect(next.players[0].bet).toBe(2);
+  });
+});
+
+describe('State Machine - handlePlayCard validation', () => {
+  const baseState: GameState = {
+    phase: 'playing',
+    currentRoundCards: 1,
+    roundDirection: 'up',
+    dealerIndex: 0,
+    currentPlayerIndex: 0,
+    vira: { suit: 'diamonds', value: '4' },
+    tableCards: [],
+    players: [
+      { id: 'p1', name: 'P1', score: 0, cards: [{ suit: 'hearts', value: '5' }], wonCards: [], bet: 0, tricks: 0 },
+      { id: 'p2', name: 'P2', score: 0, cards: [{ suit: 'clubs', value: '6' }], wonCards: [], bet: 0, tricks: 0 },
+    ],
+    maxCardsLimit: 5,
+  };
+
+  it('should ignore a play from a player who is not currently up', () => {
+    const next = handlePlayCard(baseState, 'p2', 0);
+    expect(next).toBe(baseState);
+  });
+
+  it('should ignore an out-of-range card index (too high)', () => {
+    const next = handlePlayCard(baseState, 'p1', 5);
+    expect(next).toBe(baseState);
+    expect(next.players[0].cards.length).toBe(1);
+  });
+
+  it('should ignore a negative card index', () => {
+    const next = handlePlayCard(baseState, 'p1', -1);
+    expect(next).toBe(baseState);
+  });
+
+  it('should accept a valid card index', () => {
+    const next = handlePlayCard(baseState, 'p1', 0);
+    expect(next.players[0].cards.length).toBe(0);
+    expect(next.tableCards.length).toBe(1);
+  });
+});
+
+describe('State Machine - round escalation and game over', () => {
+  it('should keep escalating the card count past maxCardsLimit until the deck itself runs out', () => {
+    // maxCardsLimit é um campo legado não aplicado: o teto real é o baralho de 40 cartas.
+    // Com 2 jogadores, floor(39/2) = 19 cartas é o teto real, bem acima do maxCardsLimit (5).
+    let state = createInitialState([
+      { id: 'p1', name: 'P1' },
+      { id: 'p2', name: 'P2' },
+    ]);
+    expect(state.maxCardsLimit).toBe(5);
+
+    state = startNextRound(state); // ronda 1 (1 carta)
+    for (let i = 0; i < 10; i++) {
+      // Força o fim da rodada sem jogar, só para avançar currentRoundCards
+      state = { ...state, phase: 'round_end' } as GameState;
+      state = startNextRound(state);
+      if (state.phase === 'game_over') break;
+    }
+
+    // Depois de passar de 5 cartas (o "maxCardsLimit" legado) o jogo continua normalmente
+    expect(state.currentRoundCards).toBeGreaterThan(5);
+    expect(state.phase).not.toBe('game_over');
+  });
+
+  it('should end the game once the next round would need more cards than the deck can deal', () => {
+    let state = createInitialState([
+      { id: 'p1', name: 'P1' },
+      { id: 'p2', name: 'P2' },
+      { id: 'p3', name: 'P3' },
+    ]);
+    // floor(39/3) = 13 cartas é o teto real para 3 jogadores.
+    state = { ...startNextRound(state), currentRoundCards: 13, phase: 'round_end' } as GameState;
+    state = startNextRound(state);
+    expect(state.phase).not.toBe('game_over');
+    expect(state.currentRoundCards).toBe(13);
+
+    state = { ...state, phase: 'round_end' } as GameState;
+    state = startNextRound(state); // pediria 14 cartas, passa do teto de 13
+    expect(state.phase).toBe('game_over');
   });
 });

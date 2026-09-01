@@ -357,6 +357,15 @@ export default function GameBoard({
     );
   }
 
+  // Regra do "fechamento": quem faz a última aposta da rodada não pode deixar
+  // a soma das apostas igual à quantidade de cartas — um valor fica bloqueado.
+  const isClosingBet = gameState.players.filter((p) => p.bet === null).length === 1;
+  const forbiddenBet =
+    gameState.phase === "betting" && isClosingBet
+      ? gameState.currentRoundCards -
+        gameState.players.reduce((sum, p) => sum + (p.bet ?? 0), 0)
+      : null;
+
   // ── Action helpers ────────────────────────────────────────────────────────
   const sendBet = (bet: number) => {
     if (isHost) {
@@ -415,7 +424,8 @@ export default function GameBoard({
                 <div className="text-zinc-400 text-xs">✅ {p.tricks}/{p.bet ?? "?"}</div>
                 {isBlindRound && p.cards.length > 0 ? (
                   <div className="mt-2 flex justify-center scale-75 origin-top">
-                    <PlayingCard card={p.cards[0]} hidden theme={theme} />
+                    {/* Rodada cega: você vê a carta dos outros, só não a sua */}
+                    <PlayingCard card={p.cards[0]} theme={theme} />
                   </div>
                 ) : (
                   <div className="text-zinc-500 text-xs mt-1">🃏 {p.cards.length} cartas</div>
@@ -507,10 +517,13 @@ export default function GameBoard({
                 <motion.div initial={{ y: 30, opacity: 0 }} animate={{ y: 0, opacity: 1 }}
                   className="bg-red-900/40 border border-red-500 p-4 rounded-xl text-center space-y-3 shadow-[0_0_30px_rgba(220,38,38,0.2)]">
                   <h3 className="text-white font-bold text-lg">Sua vez! Quantas você faz?</h3>
+                  {forbiddenBet !== null && forbiddenBet >= 0 && forbiddenBet <= me.cards.length && (
+                    <p className="text-red-300 text-xs">Você não pode fechar a rodada apostando {forbiddenBet}</p>
+                  )}
                   <div className="flex gap-2 flex-wrap justify-center">
                     {Array.from({ length: me.cards.length + 1 }).map((_, i) => (
-                      <Button key={i} onClick={() => sendBet(i)} variant="secondary"
-                        className="w-10 h-10 font-bold">{i}</Button>
+                      <Button key={i} onClick={() => sendBet(i)} variant="secondary" disabled={i === forbiddenBet}
+                        className="w-10 h-10 font-bold disabled:opacity-30 disabled:cursor-not-allowed">{i}</Button>
                     ))}
                   </div>
                 </motion.div>
