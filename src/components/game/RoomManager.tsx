@@ -25,9 +25,18 @@ export default function RoomManager({ roomId }: { roomId: string }) {
 
   useEffect(() => {
     let channel: any;
+    // Em dev, o React StrictMode (e o Fast Refresh) monta/desmonta o efeito de
+    // novo rapidinho — como setupRoom é async e cria o channel só depois de um
+    // `await`, a limpeza da PRIMEIRA montagem pode rodar antes do channel sequer
+    // existir (o `if (channel)` no cleanup não pega nada), deixando um channel
+    // órfão e inscrito, o que quebra `.on()` em qualquer nova tentativa nele.
+    // Esse guard garante que, se o efeito já foi limpo, a montagem descartada
+    // nunca chega a criar/inscrever um channel de verdade.
+    let cancelled = false;
 
     const setupRoom = async () => {
       const { data } = await supabase.auth.getSession();
+      if (cancelled) return;
       if (!data.session) {
         router.push("/");
         return;
@@ -49,7 +58,7 @@ export default function RoomManager({ roomId }: { roomId: string }) {
         .on("presence", { event: "sync" }, () => {
           const state = channel.presenceState();
           const connectedPlayers: PlayerPresence[] = [];
-          
+
           for (const [key, presencesValue] of Object.entries(state)) {
             const presences = presencesValue as any[];
             const p = presences[0] as { name: string; joinedAt: string };
@@ -59,17 +68,21 @@ export default function RoomManager({ roomId }: { roomId: string }) {
               joinedAt: p.joinedAt,
             });
           }
-          
+
           connectedPlayers.sort((a, b) => new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime());
           setPlayers(connectedPlayers);
-          
+
           if (connectedPlayers.length > 0 && connectedPlayers[0].name === name) {
             setIsHost(true);
           } else {
             setIsHost(false);
           }
-          
-          setStatus("waiting");
+
+          // Presença re-sincroniza sempre que QUALQUER jogador entra/sai/reconecta
+          // (o evento "sync" do Supabase Presence dispara pra todo mundo no canal).
+          // Se já estamos com o jogo em andamento, uma reconexão de outra pessoa não
+          // pode nos jogar de volta pro lobby — só entra em "waiting" antes de "playing".
+          setStatus((prev) => (prev === "playing" ? prev : "waiting"));
         })
         // ← CRITICAL: guests listen for the host's start signal
         .on("broadcast", { event: "start_game" }, () => {
@@ -81,14 +94,28 @@ export default function RoomManager({ roomId }: { roomId: string }) {
           setStatus((prev) => prev === "waiting" ? "playing" : prev);
         })
         .subscribe(async (status: string) => {
+          if (cancelled) return;
           if (status === "SUBSCRIBED") {
+            // joinedAt precisa ser estável entre reconexões (refresh, wifi caindo),
+            // senão cada reconexão "reset" a posição do jogador pro fim da fila de
+            // presença — o que embaralha a ordem de turno e troca o host à toa.
+            // Guardamos no localStorage do navegador, por sala+nome, e reusamos.
+            const storageKey = `fodinha:joinedAt:${roomId}:${name}`;
+            let joinedAt = window.localStorage.getItem(storageKey);
+            if (!joinedAt) {
+              joinedAt = new Date().toISOString();
+              window.localStorage.setItem(storageKey, joinedAt);
+            }
+
             await channel.track({
               name: name,
-              joinedAt: new Date().toISOString(),
+              joinedAt,
             });
+            if (cancelled) return;
 
             // Check if a game is already in progress (late joiner / page refresh)
             const { data } = await supabase.from('rooms').select('state').eq('id', roomId).single();
+            if (cancelled) return;
             if (data?.state) {
               setStatus("playing");
             }
@@ -99,6 +126,7 @@ export default function RoomManager({ roomId }: { roomId: string }) {
     setupRoom();
 
     return () => {
+      cancelled = true;
       if (channel) supabase.removeChannel(channel);
     };
   }, [roomId, router]);

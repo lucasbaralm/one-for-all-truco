@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState } from "react";
 
-export type Theme = "aquarium" | "candy" | "adventure" | "pedro";
+export type Theme = "aquarium" | "candy" | "adventure" | "pedro" | "lotr" | "mpb" | "lgbt";
 
 interface ThemeContextType {
   theme: Theme;
@@ -16,6 +16,9 @@ const THEME_BG: Record<Theme, string> = {
   candy: "/themes/bg_candy.jpg",
   adventure: "/themes/bg_adventure.jpg",
   pedro: "/themes/bg_pedro.jpg",
+  lotr: "/themes/bg_lotr.jpg",
+  mpb: "/themes/bg_mpb.jpg",
+  lgbt: "/themes/bg_lgbt.jpg",
 };
 
 const THEME_OVERLAY: Record<Theme, string> = {
@@ -23,6 +26,9 @@ const THEME_OVERLAY: Record<Theme, string> = {
   candy: "bg-black/50",
   adventure: "bg-black/65",
   pedro: "bg-black/55",
+  lotr: "bg-black/60",
+  mpb: "bg-black/50",
+  lgbt: "bg-black/55",
 };
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -31,7 +37,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const savedTheme = localStorage.getItem("fodinha_theme") as Theme;
-    if (savedTheme && ["aquarium", "candy", "adventure", "pedro"].includes(savedTheme)) {
+    if (savedTheme && ["aquarium", "candy", "adventure", "pedro", "lotr", "mpb", "lgbt"].includes(savedTheme)) {
       setThemeState(savedTheme);
     }
     setMounted(true);

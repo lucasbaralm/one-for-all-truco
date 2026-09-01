@@ -9,6 +9,9 @@ const THEMES = [
   { id: "candy"   as const, icon: "🍬", label: "Doces",   active: "bg-pink-600 hover:bg-pink-700" },
   { id: "adventure" as const, icon: "⚔️", label: "Aventura", active: "bg-green-600 hover:bg-green-700" },
   { id: "pedro"   as const, icon: "🎭", label: "Pedro",   active: "bg-yellow-600 hover:bg-yellow-700" },
+  { id: "lotr"    as const, icon: "💍", label: "Anéis",   active: "bg-amber-700 hover:bg-amber-800" },
+  { id: "mpb"     as const, icon: "🎸", label: "MPB",     active: "bg-emerald-700 hover:bg-emerald-800" },
+  { id: "lgbt"    as const, icon: "🏳️‍🌈", label: "Orgulho", active: "bg-fuchsia-600 hover:bg-fuchsia-700" },
 ];
 
 export function ThemeSelector() {

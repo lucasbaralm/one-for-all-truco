@@ -15,6 +15,8 @@ export default function Lobby() {
   const [playerName, setPlayerName] = useState("");
   const [roomCode, setRoomCode] = useState("");
   const [history, setHistory] = useState<any[]>([]);
+  const [creatingRoom, setCreatingRoom] = useState(false);
+  const [createRoomError, setCreateRoomError] = useState("");
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -42,19 +44,42 @@ export default function Lobby() {
     fetchHistory();
   }, [router]);
 
-  const handleCreateRoom = async () => {
+  const generateRoomCode = () => {
     // Gera um código aleatório de 4 letras para a sala
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let code = "";
     for (let i = 0; i < 4; i++) {
       code += chars.charAt(Math.floor(Math.random() * chars.length));
     }
-    
-    // Insere no banco para garantir que a sala existe para o snapshot
-    await supabase.from("rooms").insert({ id: code });
+    return code;
+  };
 
-    // Salva o código que vamos usar antes de navegar, para a tela de loading
-    router.push(`/game/${code}`);
+  const handleCreateRoom = async () => {
+    setCreatingRoom(true);
+    setCreateRoomError("");
+
+    // Com apenas 26^4 códigos possíveis e salas que nunca expiram, colisão é
+    // questão de tempo — tenta algumas vezes com um código novo se acontecer.
+    const MAX_ATTEMPTS = 5;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const code = generateRoomCode();
+      const { error } = await supabase.from("rooms").insert({ id: code });
+
+      if (!error) {
+        router.push(`/game/${code}`);
+        return;
+      }
+
+      // 23505 = violação de unicidade no Postgres (código já existe): tenta outro.
+      if (error.code !== "23505") {
+        setCreateRoomError("Não foi possível criar a sala. Tente novamente.");
+        setCreatingRoom(false);
+        return;
+      }
+    }
+
+    setCreateRoomError("Não foi possível gerar um código de sala único. Tente novamente.");
+    setCreatingRoom(false);
   };
 
   const handleJoinRoom = (e: React.FormEvent) => {
@@ -87,13 +112,19 @@ export default function Lobby() {
               Crie uma sala e convide seus amigos.
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <Button 
+          <CardContent className="space-y-3">
+            <Button
               onClick={handleCreateRoom}
+              disabled={creatingRoom}
               className="w-full h-12 bg-red-600 hover:bg-red-700 text-white font-bold text-lg"
             >
-              Criar Sala
+              {creatingRoom ? "Criando..." : "Criar Sala"}
             </Button>
+            {createRoomError && (
+              <div className="text-red-500 text-sm font-bold bg-red-900/20 p-3 rounded-md border border-red-900/50">
+                {createRoomError}
+              </div>
+            )}
           </CardContent>
         </Card>
 

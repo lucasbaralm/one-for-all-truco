@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { supabase } from "@/lib/supabase/client";
 import {
   GameState,
@@ -9,9 +9,11 @@ import {
   handleBet,
   handlePlayCard,
   handleShuffleAndDeal,
+  ShuffleStyle,
 } from "@/lib/game/state-machine";
 import { PlayerPresence } from "./RoomManager";
 import { Card as GameCard, getWinningCardIndex } from "@/lib/game/rules";
+import { resolveHostId } from "@/lib/game/host";
 import { motion, AnimatePresence, LayoutGroup } from "framer-motion";
 import { Spade, Heart, Club, Diamond, SmilePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -43,7 +45,7 @@ interface TrickResult {
 export default function GameBoard({
   roomId,
   playerName,
-  isHost,
+  isHost: presenceIsHost,
   initialPlayers,
   channel,
 }: GameBoardProps) {
@@ -52,12 +54,30 @@ export default function GameBoard({
   const [trickResult, setTrickResult] = useState<TrickResult | null>(null);
   const { theme } = useTheme();
 
-  // Prevent stale-closure mutations from overwriting newer state
-  const gameStateRef = useRef<GameState | null>(null);
-  gameStateRef.current = gameState;
-
   // Unique key per round so layoutId doesn't conflict across rounds
   const roundKey = gameState?.currentRoundCards ?? 0;
+
+  // ── Sticky host authority ────────────────────────────────────────────────
+  // `presenceIsHost` (from RoomManager) is purely "who joined earliest and is
+  // still connected" — it flips live on every reconnect, which would yank host
+  // authority back and forth mid-game. Once a game exists, authority instead
+  // follows `gameState.hostId`: it only moves on when the CURRENT host is no
+  // longer present, and never reverts to a host who reconnects later.
+  const myId = playerName;
+  const isHost = useMemo(() => {
+    if (!gameState) return presenceIsHost; // Antes do primeiro fetch: usa o fallback de presença
+    return resolveHostId(gameState.hostId, initialPlayers) === myId;
+  }, [gameState, initialPlayers, presenceIsHost, myId]);
+
+  // Assim que este cliente se torna o host efetivo, grava isso no estado
+  // compartilhado para que os outros clientes também convirjam.
+  useEffect(() => {
+    if (!gameState || !isHost || gameState.hostId === myId) return;
+    const next = { ...gameState, hostId: myId };
+    setGameState(next);
+    supabase.from("rooms").update({ state: next }).eq("id", roomId).then();
+    channel.send({ type: "broadcast", event: "sync_state", payload: next });
+  }, [gameState, isHost, myId, roomId, channel]);
 
   // ── Persist + broadcast ──────────────────────────────────────────────────
   const persistAndBroadcast = useCallback(
@@ -194,9 +214,12 @@ export default function GameBoard({
           channel.send({ type: "broadcast", event: "sync_state", payload: data.state });
         }
       } else if (isHost) {
-        // First run: create the game
+        // First run: create the game. Uses upsert (not update) because the room
+        // row may not exist yet — e.g. someone joined via a hand-typed code that
+        // was never created through "Criar Sala"; an update would silently match
+        // zero rows and the game would never actually get persisted.
         const newState = startNextRound(createInitialState(initialPlayers));
-        await supabase.from("rooms").update({ state: newState }).eq("id", roomId);
+        await supabase.from("rooms").upsert({ id: roomId, state: newState });
         if (!mounted) return;
         applyState(newState);
         channel.send({ type: "broadcast", event: "sync_state", payload: newState });
@@ -232,6 +255,14 @@ export default function GameBoard({
     channel.on("broadcast", { event: "play_card" }, (res: any) => {
       if (!isHost) return;
       processCardPlay(res.payload.playerId, res.payload.cardIndex);
+    });
+
+    // Guest → host: shuffle relay (the dealer rotates every round and is often
+    // NOT the host — host is who's allowed to write to the DB, dealer is a game
+    // rule. Without this relay, a non-host dealer's shuffle click did nothing).
+    channel.on("broadcast", { event: "player_shuffle" }, (res: any) => {
+      if (!isHost) return;
+      hostAction((prev) => handleShuffleAndDeal(prev, res.payload.playerId, res.payload.style));
     });
 
     // Periodic DB resync for guests (catch missed broadcasts)
@@ -448,10 +479,16 @@ export default function GameBoard({
           {/* Shuffle phase */}
           {gameState.phase === "shuffling" && (
             <ShufflePanel
-              isDealer={isHost && gameState.players[gameState.dealerIndex]?.name === playerName}
+              isDealer={gameState.players[gameState.dealerIndex]?.name === playerName}
               dealerName={gameState.players[gameState.dealerIndex]?.name ?? ""}
-              onShuffle={() => {
-                hostAction((prev) => handleShuffleAndDeal(prev, me?.id || ""));
+              onShuffle={(type) => {
+                if (!me) return;
+                const style: ShuffleStyle = type === "lucas" ? "lucas_supreme" : "random";
+                if (isHost) {
+                  hostAction((prev) => handleShuffleAndDeal(prev, me.id, style));
+                } else {
+                  channel.send({ type: "broadcast", event: "player_shuffle", payload: { playerId: me.id, style } });
+                }
               }}
             />
           )}
@@ -564,10 +601,8 @@ export default function GameBoard({
                 {/* Emoji picker */}
                 <div className="absolute -top-4 -right-4">
                   <Popover>
-                    <PopoverTrigger>
-                      <button className="rounded-full w-9 h-9 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white shadow-lg flex items-center justify-center">
-                        <SmilePlus className="w-4 h-4" />
-                      </button>
+                    <PopoverTrigger className="rounded-full w-9 h-9 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white shadow-lg flex items-center justify-center">
+                      <SmilePlus className="w-4 h-4" />
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-2 bg-zinc-900 border-zinc-800 flex gap-2" side="top">
                       {["😂", "🤡", "😡", "💀", "🍻", "🔥"].map((emoji) => (
@@ -617,7 +652,7 @@ export default function GameBoard({
 // ─────────────────────────────────────────────────────────────────────────────
 // SHUFFLE PANEL
 // ─────────────────────────────────────────────────────────────────────────────
-type ShuffleType = "cut" | "riffle" | "overhand";
+type ShuffleType = "cut" | "riffle" | "overhand" | "lucas";
 
 function ShufflePanel({
   isDealer,
@@ -642,11 +677,16 @@ function ShufflePanel({
               { type: "cut" as ShuffleType, label: "✂️ Cortar", desc: "Divide ao meio" },
               { type: "riffle" as ShuffleType, label: "🎴 Riffle", desc: "Entrelaçar" },
               { type: "overhand" as ShuffleType, label: "🤌 Pilha", desc: "Mover por cima" },
+              { type: "lucas" as ShuffleType, label: "👑 Supremo do Lucas", desc: "Não embaralha nada" },
             ].map(({ type, label, desc }) => (
               <motion.button key={type} whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}
                 onHoverStart={() => setPreview(type)} onHoverEnd={() => setPreview(null)}
                 onClick={() => onShuffle(type)}
-                className="flex flex-col items-center gap-1 bg-zinc-900 border border-zinc-700 hover:border-red-500 hover:bg-red-900/20 px-5 py-3 rounded-xl transition-all text-white">
+                className={`flex flex-col items-center gap-1 bg-zinc-900 border px-5 py-3 rounded-xl transition-all text-white ${
+                  type === "lucas"
+                    ? "border-yellow-600 hover:border-yellow-400 hover:bg-yellow-900/20"
+                    : "border-zinc-700 hover:border-red-500 hover:bg-red-900/20"
+                }`}>
                 <span className="text-2xl">{label.split(" ")[0]}</span>
                 <span className="font-bold text-sm">{label.split(" ").slice(1).join(" ")}</span>
                 <span className="text-zinc-500 text-xs">{desc}</span>
@@ -700,6 +740,25 @@ function DeckAnimation({ type }: { type: ShuffleType }) {
       </motion.div>
     );
   }
+  if (type === "lucas") {
+    return (
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        className="relative flex flex-col items-center h-20 justify-end w-32">
+        <motion.span className="text-2xl mb-1"
+          animate={{ y: [0, -6, 0], rotate: [0, -8, 8, 0] }}
+          transition={{ duration: 1, repeat: Infinity }}>
+          👑
+        </motion.span>
+        <div className="relative w-8 h-12">
+          {cards.map((_, i) => (
+            <div key={i}
+              className="absolute w-8 h-12 bg-gradient-to-br from-yellow-600 to-yellow-800 border border-yellow-400 rounded-sm shadow"
+              style={{ bottom: i * 1.5, left: i * 1.5 }} />
+          ))}
+        </div>
+      </motion.div>
+    );
+  }
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="relative flex h-20 items-end w-32 justify-center">
@@ -722,6 +781,9 @@ const CARD_BACKS: Record<string, string> = {
   adventure: "/themes/card_back_adventure.jpg",
   pedro: "/themes/card_back_pedro.jpg",
   aquarium: "/themes/card_back_aquarium.jpg",
+  lotr: "/themes/card_back_lotr.jpg",
+  mpb: "/themes/card_back_mpb.jpg",
+  lgbt: "/themes/card_back_lgbt.jpg",
 };
 
 const CARD_BORDERS: Record<string, [string, string]> = {
@@ -729,6 +791,9 @@ const CARD_BORDERS: Record<string, [string, string]> = {
   candy: ["border-pink-400", "border-purple-400"],
   adventure: ["border-orange-400", "border-green-500"],
   pedro: ["border-yellow-400", "border-zinc-400"],
+  lotr: ["border-amber-500", "border-stone-400"],
+  mpb: ["border-orange-600", "border-teal-600"],
+  lgbt: ["border-rose-500", "border-indigo-500"],
 };
 
 function PlayingCard({

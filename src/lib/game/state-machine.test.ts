@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createInitialState, startNextRound, handleBet, handlePlayCard, handleShuffleAndDeal, GameState } from './state-machine';
 import { PlayerPresence } from '@/components/game/RoomManager';
-import { Card } from './rules';
+import { Card, generateDeck } from './rules';
 
 describe('State Machine - Setup', () => {
   const mockPlayers: PlayerPresence[] = [
@@ -51,7 +51,9 @@ describe('State Machine - Setup', () => {
     expect(state.dealerIndex).toBe(0);
     state = handleShuffleAndDeal(state, '1');
     state = handleBet(state, '2', 0);
-    state = handleBet(state, '1', 1);
+    // Alice (dealer) faz a última aposta da rodada de 1 carta: apostar 1 fecharia
+    // a soma em 1 (= currentRoundCards), então só 0 é permitido aqui.
+    state = handleBet(state, '1', 0);
     state = handlePlayCard(state, '2', 0);
     state = handlePlayCard(state, '1', 0);
     expect(state.phase).toBe('round_end');
@@ -59,6 +61,63 @@ describe('State Machine - Setup', () => {
     state = startNextRound(state); // Ronda 2: dealer roda para Bob (1)
     expect(state.dealerIndex).toBe(1);
     expect(state.currentRoundCards).toBe(2);
+  });
+});
+
+describe('State Machine - "Embaralhamento Supremo do Lucas"', () => {
+  const mockPlayers: PlayerPresence[] = [
+    { id: '1', name: 'Alice', joinedAt: '2023-01-01T00:00:00Z' },
+    { id: '2', name: 'Bob', joinedAt: '2023-01-01T00:00:01Z' },
+    { id: '3', name: 'Charlie', joinedAt: '2023-01-01T00:00:02Z' },
+  ];
+
+  it('deals cards straight off the raw (unshuffled) deck instead of randomizing', () => {
+    let state = createInitialState(mockPlayers);
+    state = startNextRound(state); // 1 carta, dealer = Alice (host)
+    state = handleShuffleAndDeal(state, '1', 'lucas_supreme');
+
+    const rawDeck = generateDeck();
+    // 3 jogadores, 1 carta cada: as 3 primeiras cartas do baralho não embaralhado,
+    // na ordem dos jogadores, e o vira é a carta seguinte.
+    expect(state.players[0].cards).toEqual([rawDeck[0]]);
+    expect(state.players[1].cards).toEqual([rawDeck[1]]);
+    expect(state.players[2].cards).toEqual([rawDeck[2]]);
+    expect(state.vira).toEqual(rawDeck[3]);
+  });
+
+  it('is deterministic across calls, unlike a real shuffle', () => {
+    let stateA = createInitialState(mockPlayers);
+    stateA = startNextRound(stateA);
+    stateA = handleShuffleAndDeal(stateA, '1', 'lucas_supreme');
+
+    let stateB = createInitialState(mockPlayers);
+    stateB = startNextRound(stateB);
+    stateB = handleShuffleAndDeal(stateB, '1', 'lucas_supreme');
+
+    expect(stateA.players.map(p => p.cards)).toEqual(stateB.players.map(p => p.cards));
+    expect(stateA.vira).toEqual(stateB.vira);
+  });
+
+  it('still only lets the current dealer trigger it', () => {
+    let state = createInitialState(mockPlayers);
+    state = startNextRound(state);
+
+    const rejected = handleShuffleAndDeal(state, '2', 'lucas_supreme'); // Bob não é o dealer
+    expect(rejected).toBe(state);
+  });
+
+  it('defaults to a real random shuffle when no style is given', () => {
+    let stateA = createInitialState(mockPlayers);
+    stateA = startNextRound(stateA);
+    stateA = handleShuffleAndDeal(stateA, '1'); // sem style: shuffle de verdade
+
+    let stateB = createInitialState(mockPlayers);
+    stateB = startNextRound(stateB);
+    stateB = handleShuffleAndDeal(stateB, '1');
+
+    // Duas rodadas de shuffle de verdade batendo carta por carta é
+    // astronomicamente improvável — bem diferente do 'lucas_supreme'.
+    expect(stateA.players.map(p => p.cards)).not.toEqual(stateB.players.map(p => p.cards));
   });
 });
 
@@ -112,7 +171,8 @@ describe('State Machine - Gameplay Flow', () => {
         { id: 'p1', name: 'P1', score: 0, cards: [p1Card], wonCards: [], bet: 0, tricks: 0 },
         { id: 'p2', name: 'P2', score: 0, cards: [p2Card], wonCards: [], bet: 1, tricks: 0 }
       ],
-      maxCardsLimit: 5
+      maxCardsLimit: 5,
+      hostId: null
     };
 
     // P2 joga
@@ -159,7 +219,8 @@ describe('State Machine - Gameplay Flow', () => {
         { id: 'p1', name: 'P1', score: 5, cards: [p1Card], wonCards: [], bet: 1, tricks: 0 },
         { id: 'p2', name: 'P2', score: 2, cards: [p2Card], wonCards: [], bet: 1, tricks: 0 }
       ],
-      maxCardsLimit: 5
+      maxCardsLimit: 5,
+      hostId: null
     };
 
     state = handlePlayCard(state, 'p2', 0);
@@ -189,6 +250,7 @@ describe('State Machine - handleBet validation', () => {
       { id: 'p2', name: 'P2', score: 0, cards: [{ suit: 'hearts', value: '7' }, { suit: 'clubs', value: 'Q' }], wonCards: [], bet: null, tricks: 0 },
     ],
     maxCardsLimit: 5,
+    hostId: null,
   };
 
   it('should ignore a bet from a player who is not currently up', () => {
@@ -218,7 +280,7 @@ describe('State Machine - handleBet validation', () => {
   });
 
   it('should not let the closing bettor make the total equal the round card count', () => {
-    let state = handleBet(baseState, 'p1', 1); // sobra p2, currentRoundCards = 2
+    const state = handleBet(baseState, 'p1', 1); // sobra p2, currentRoundCards = 2
     expect(state.players[0].bet).toBe(1);
     expect(state.currentPlayerIndex).toBe(1);
 
@@ -255,6 +317,7 @@ describe('State Machine - handlePlayCard validation', () => {
       { id: 'p2', name: 'P2', score: 0, cards: [{ suit: 'clubs', value: '6' }], wonCards: [], bet: 0, tricks: 0 },
     ],
     maxCardsLimit: 5,
+    hostId: null,
   };
 
   it('should ignore a play from a player who is not currently up', () => {
@@ -310,7 +373,8 @@ describe('State Machine - round escalation and game over', () => {
       { id: 'p3', name: 'P3' },
     ]);
     // floor(39/3) = 13 cartas é o teto real para 3 jogadores.
-    state = { ...startNextRound(state), currentRoundCards: 13, phase: 'round_end' } as GameState;
+    // Começa em 12: a próxima rodada pede 13 (exatamente o teto) e deve ser aceita.
+    state = { ...startNextRound(state), currentRoundCards: 12, phase: 'round_end' } as GameState;
     state = startNextRound(state);
     expect(state.phase).not.toBe('game_over');
     expect(state.currentRoundCards).toBe(13);

@@ -1,7 +1,13 @@
 import pg from 'pg';
+import dotenv from 'dotenv';
+// O projeto usa .env.local (padrão do Next.js), não .env — precisa apontar explicitamente.
+dotenv.config({ path: '.env.local' });
 const { Client } = pg;
 
-const connectionString = 'postgresql://postgres:MamadoresCasados@db.zckgjlhxwsxqyvkotytx.supabase.co:5432/postgres';
+const connectionString = process.env.SUPABASE_DB_URL;
+if (!connectionString) {
+  throw new Error('SUPABASE_DB_URL não está definida. Configure-a em .env.local.');
+}
 
 async function setup() {
   const client = new Client({
