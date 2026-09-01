@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import {
   GameState,
@@ -9,13 +10,14 @@ import {
   handleBet,
   handlePlayCard,
   handleShuffleAndDeal,
+  voteToEndMatch,
   ShuffleStyle,
 } from "@/lib/game/state-machine";
 import { PlayerPresence } from "./RoomManager";
 import { Card as GameCard, getWinningCardIndex } from "@/lib/game/rules";
 import { resolveHostId } from "@/lib/game/host";
 import { motion, AnimatePresence, LayoutGroup } from "framer-motion";
-import { Spade, Heart, Club, Diamond, SmilePlus } from "lucide-react";
+import { Spade, Heart, Club, Diamond, SmilePlus, ChevronDown, ChevronUp, LogOut, Flag, WifiOff, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/components/ThemeProvider";
 import {
@@ -23,6 +25,15 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+
+const SHUFFLE_TYPE_LABELS: Record<string, string> = {
+  cut: "✂️ Cortar",
+  riffle: "🎴 Riffle",
+  overhand: "🤌 Pilha",
+  lucas: "👑 Supremo do Lucas",
+};
+
+const DISCONNECT_WAIT_MS = 5 * 60 * 1000;
 
 interface GameBoardProps {
   roomId: string;
@@ -49,10 +60,36 @@ export default function GameBoard({
   initialPlayers,
   channel,
 }: GameBoardProps) {
+  const router = useRouter();
   const [gameState, setGameState] = useState<GameState | null>(null);
-  const [emojis, setEmojis] = useState<{ id: string; emoji: string; x: number }[]>([]);
+  const [emojis, setEmojis] = useState<{ id: string; emoji: string; fromPlayerId: string }[]>([]);
   const [trickResult, setTrickResult] = useState<TrickResult | null>(null);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [disconnectTimer, setDisconnectTimer] = useState<{
+    startedAt: number;
+    dismissed: boolean;
+    paused: boolean;
+    pausedAt: number | null;
+    pausedMsTotal: number;
+  } | null>(null);
+  const [now, setNow] = useState(() => Date.now()); // atualizado 1x/seg pelo contador da desconexão
+  const [shuffleAnnouncement, setShuffleAnnouncement] = useState<{ dealerName: string; label: string } | null>(null);
   const { theme } = useTheme();
+
+  // Sempre a versão mais atual de initialPlayers, pra usar dentro de callbacks
+  // de broadcast (cujo closure foi criado há um tempo) sem precisar re-registrar
+  // os listeners do channel toda vez que a presença muda.
+  const initialPlayersRef = useRef(initialPlayers);
+  useEffect(() => {
+    initialPlayersRef.current = initialPlayers;
+  }, [initialPlayers]);
+
+  // Quantos dos jogadores passados estão conectados agora (presença ao vivo).
+  // Usado pra decidir a maioria da votação de encerrar a partida.
+  const countConnected = useCallback((players: { id: string }[]) => {
+    const connectedIds = new Set(initialPlayersRef.current.map((p) => p.id));
+    return players.filter((p) => connectedIds.has(p.id)).length;
+  }, []);
 
   // Unique key per round so layoutId doesn't conflict across rounds
   const roundKey = gameState?.currentRoundCards ?? 0;
@@ -101,6 +138,13 @@ export default function GameBoard({
       if (JSON.stringify(prev) === JSON.stringify(incoming)) return prev;
       return incoming;
     });
+  }, []);
+
+  // ── Floating emoji (from sender's portrait to table center, then fades) ──
+  const addFloatingEmoji = useCallback((emoji: string, fromPlayerId: string) => {
+    const id = Math.random().toString();
+    setEmojis((prev) => [...prev, { id, emoji, fromPlayerId }]);
+    setTimeout(() => setEmojis((prev) => prev.filter((e) => e.id !== id)), 1800);
   }, []);
 
   // ── Host: apply action, save, broadcast ──────────────────────────────────
@@ -239,10 +283,10 @@ export default function GameBoard({
     });
 
     channel.on("broadcast", { event: "emoji" }, (res: any) => {
-      const id = Math.random().toString();
-      const x = Math.random() * 80 + 10;
-      setEmojis((prev) => [...prev, { id, emoji: res.payload.emoji, x }]);
-      setTimeout(() => setEmojis((prev) => prev.filter((e) => e.id !== id)), 3000);
+      // Já foi adicionado otimisticamente na hora do clique, no meu próprio cliente.
+      // (playerId === playerName nesse app: a chave de presença É o nome.)
+      if (res.payload.fromPlayerId === playerName) return;
+      addFloatingEmoji(res.payload.emoji, res.payload.fromPlayerId);
     });
 
     // Guest → host: bet relay
@@ -265,6 +309,20 @@ export default function GameBoard({
       hostAction((prev) => handleShuffleAndDeal(prev, res.payload.playerId, res.payload.style));
     });
 
+    // Anuncia pra mesa toda qual método de embaralhar foi escolhido (puramente
+    // informativo — a lógica do jogo já trata todos os tipos exceto "lucas" como
+    // um shuffle de verdade, isso aqui é só pra deixar público quem escolheu o quê).
+    channel.on("broadcast", { event: "shuffle_announce" }, (res: any) => {
+      setShuffleAnnouncement({ dealerName: res.payload.dealerName, label: res.payload.label });
+      setTimeout(() => setShuffleAnnouncement((cur) => (cur?.dealerName === res.payload.dealerName ? null : cur)), 4000);
+    });
+
+    // Guest → host: voto para encerrar a partida antes da hora
+    channel.on("broadcast", { event: "player_vote_end" }, (res: any) => {
+      if (!isHost) return;
+      hostAction((prev) => voteToEndMatch(prev, res.payload.playerId, countConnected(prev.players)));
+    });
+
     // Periodic DB resync for guests (catch missed broadcasts)
     const resyncInterval = setInterval(async () => {
       if (isHost) return;
@@ -277,6 +335,53 @@ export default function GameBoard({
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId, isHost]);
+
+  // ── Disconnect detection: quem está no jogo mas sumiu da presença ao vivo ──
+  const connectedIds = new Set(initialPlayers.map((p) => p.id));
+  const missingPlayers = gameState ? gameState.players.filter((p) => !connectedIds.has(p.id)) : [];
+  const missingKey = missingPlayers.map((p) => p.id).sort().join(",");
+
+  useEffect(() => {
+    if (missingKey) {
+      setDisconnectTimer((prev) => prev ?? { startedAt: Date.now(), dismissed: false, paused: false, pausedAt: null, pausedMsTotal: 0 });
+    } else {
+      setDisconnectTimer(null);
+    }
+  }, [missingKey]);
+
+  useEffect(() => {
+    if (!disconnectTimer || disconnectTimer.dismissed) return;
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [disconnectTimer]);
+
+  const toggleDisconnectPause = () => {
+    setDisconnectTimer((prev) => {
+      if (!prev) return prev;
+      if (prev.paused) {
+        // Retoma: soma o tempo que passou pausado ao total já acumulado.
+        return {
+          ...prev,
+          paused: false,
+          pausedAt: null,
+          pausedMsTotal: prev.pausedMsTotal + (Date.now() - (prev.pausedAt ?? Date.now())),
+        };
+      }
+      return { ...prev, paused: true, pausedAt: Date.now() };
+    });
+  };
+
+  const disconnectElapsedMs = disconnectTimer
+    ? (disconnectTimer.paused ? (disconnectTimer.pausedAt ?? now) : now) - disconnectTimer.startedAt - disconnectTimer.pausedMsTotal
+    : 0;
+  const disconnectMsRemaining = disconnectTimer ? Math.max(0, DISCONNECT_WAIT_MS - disconnectElapsedMs) : 0;
+  const showDisconnectOverlay =
+    !!gameState &&
+    missingPlayers.length > 0 &&
+    !!disconnectTimer &&
+    !disconnectTimer.dismissed &&
+    disconnectMsRemaining > 0 &&
+    ["shuffling", "betting", "playing"].includes(gameState.phase);
 
   // ── Guard: waiting for state ─────────────────────────────────────────────
   if (!gameState) {
@@ -367,6 +472,9 @@ export default function GameBoard({
             Começar Nova Partida
           </Button>
         )}
+        <Button variant="secondary" onClick={() => router.push("/lobby")} className="w-full max-w-md">
+          <LogOut className="w-4 h-4" /> Voltar ao Menu
+        </Button>
       </div>
     );
   }
@@ -376,9 +484,27 @@ export default function GameBoard({
   const me = gameState.players.find((p) => p.name === playerName);
   const others = gameState.players.filter((p) => p.name !== playerName);
   const isBlindRound = gameState.currentRoundCards === 1;
+  // Quórum da votação de encerrar: metade de quem está CONECTADO agora, não da mesa toda.
+  // (usa a prop initialPlayers direto, não a ref — isso aqui é render, não callback assíncrono)
+  const connectedIdsForQuorum = new Set(initialPlayers.map((p) => p.id));
+  const endVoteQuorum = Math.ceil(gameState.players.filter((p) => connectedIdsForQuorum.has(p.id)).length / 2);
   const isMyTurn =
     gameState.phase === "playing" &&
     gameState.players[gameState.currentPlayerIndex]?.name === playerName;
+
+  // Quem está ativo agora e o que essa pessoa está fazendo — cobre as 3 fases
+  // com jogador da vez (embaralhar/apostar/jogar), pra dar um destaque igual
+  // pra todo mundo (inclusive eu mesmo apostando, que antes não tinha marca).
+  const activePlayerId =
+    gameState.phase === "shuffling" ? gameState.players[gameState.dealerIndex]?.id
+    : gameState.phase === "betting" || gameState.phase === "playing" ? gameState.players[gameState.currentPlayerIndex]?.id
+    : null;
+  const activeActionLabel =
+    gameState.phase === "shuffling" ? "🔀 Embaralhando"
+    : gameState.phase === "betting" ? "💭 Apostando"
+    : gameState.phase === "playing" ? "🎯 Escolhendo carta"
+    : null;
+  const isMeActive = !!me && activePlayerId === me.id;
 
   let winningTableCardIndex = -1;
   if (gameState.tableCards.length > 0 && gameState.vira) {
@@ -415,12 +541,145 @@ export default function GameBoard({
     }
   };
 
+  const sendEmoji = (emoji: string) => {
+    if (!me) return;
+    addFloatingEmoji(emoji, me.id); // otimista: aparece pra mim na hora, sem esperar o broadcast
+    channel.send({ type: "broadcast", event: "emoji", payload: { emoji, fromPlayerId: me.id } });
+  };
+
+  const sendEndVote = () => {
+    if (!me) return;
+    if (isHost) {
+      hostAction((prev) => voteToEndMatch(prev, me.id, countConnected(prev.players)));
+    } else {
+      channel.send({ type: "broadcast", event: "player_vote_end", payload: { playerId: me.id } });
+    }
+  };
+
+  const handleLeaveConfirmed = () => {
+    router.push("/lobby");
+  };
+
   // ─────────────────────────────────────────────────────────────────────────
   // RENDER
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <LayoutGroup>
       <div className="flex flex-col h-[90vh] justify-between relative overflow-hidden">
+
+        {/* ── FLOATING EMOJIS: fly from whoever sent it, in to the table center ── */}
+        {/* z-[60]: acima do popup do emoji picker (z-50), senão fica escondido atrás dele */}
+        <div className="absolute inset-0 pointer-events-none z-[60] overflow-hidden">
+          {emojis.map((e) => {
+            const senderIsMe = e.fromPlayerId === me?.id;
+            const senderIndex = others.findIndex((p) => p.id === e.fromPlayerId);
+            const startLeft = senderIsMe
+              ? 50
+              : senderIndex === -1
+              ? 50
+              : others.length > 1
+              ? 15 + (senderIndex / (others.length - 1)) * 70
+              : 50;
+            const startTop = senderIsMe ? 92 : 10;
+            return (
+              <motion.div key={e.id}
+                initial={{ left: `${startLeft}%`, top: `${startTop}%`, opacity: 1, scale: 0.6, x: "-50%", y: "-50%" }}
+                animate={{ left: "50%", top: "50%", opacity: 0, scale: 1.8 }}
+                transition={{ duration: 1.6, ease: "easeIn" }}
+                className="absolute text-4xl">
+                {e.emoji}
+              </motion.div>
+            );
+          })}
+        </div>
+
+        {/* ── TOOLBAR: voltar ao menu + votar para encerrar ── */}
+        <div className="absolute top-2 left-2 z-30 flex items-center gap-2">
+          <button
+            onClick={() => setShowLeaveConfirm(true)}
+            className="flex items-center gap-1.5 bg-black/50 hover:bg-black/70 border border-white/10 text-zinc-300 hover:text-white text-xs font-bold px-3 py-2 rounded-xl backdrop-blur-sm transition-all">
+            <LogOut className="w-3.5 h-3.5" /> Menu
+          </button>
+          <button
+            onClick={sendEndVote}
+            disabled={!!me && !!gameState.endVote?.votes.includes(me.id)}
+            className="flex items-center gap-1.5 bg-black/50 hover:bg-red-900/40 border border-white/10 hover:border-red-500/50 text-zinc-300 hover:text-white text-xs font-bold px-3 py-2 rounded-xl backdrop-blur-sm transition-all disabled:opacity-60 disabled:cursor-default">
+            <Flag className="w-3.5 h-3.5" />
+            {gameState.endVote
+              ? `Encerrar (${gameState.endVote.votes.length}/${endVoteQuorum})`
+              : "Votar p/ Encerrar"}
+          </button>
+        </div>
+
+        {/* ── Leave confirmation modal ── */}
+        <AnimatePresence>
+          {showLeaveConfirm && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl">
+                <h3 className="text-white font-bold text-lg">Voltar ao menu principal?</h3>
+                <p className="text-zinc-400 text-sm">Você vai sair da partida em andamento. Os outros jogadores continuam a mesa sem você.</p>
+                <div className="flex gap-3">
+                  <Button variant="secondary" className="flex-1" onClick={() => setShowLeaveConfirm(false)}>Cancelar</Button>
+                  <Button className="flex-1 bg-red-600 hover:bg-red-700 text-white" onClick={handleLeaveConfirmed}>Sair</Button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ── Shuffle method announcement (público pra mesa toda) ── */}
+        <AnimatePresence>
+          {shuffleAnnouncement && (
+            <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+              className="absolute top-2 left-1/2 -translate-x-1/2 z-30 bg-black/60 border border-yellow-500/40 text-yellow-200 text-xs font-bold px-3 py-1.5 rounded-full backdrop-blur-sm whitespace-nowrap">
+              {shuffleAnnouncement.dealerName} embaralhou com {shuffleAnnouncement.label}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ── Disconnect wait overlay ── */}
+        <AnimatePresence>
+          {showDisconnectOverlay && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[90] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                className="bg-zinc-900 border border-red-500/40 rounded-2xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl">
+                <WifiOff className="w-10 h-10 text-red-400 mx-auto" />
+                <h3 className="text-white font-bold text-lg">
+                  {missingPlayers.map((p) => p.name).join(", ")} desconectou{missingPlayers.length > 1 ? "ram" : ""}
+                </h3>
+                <p className="text-zinc-400 text-sm">
+                  {disconnectTimer?.paused ? "Contagem pausada" : "Aguardando reconexão..."}
+                </p>
+                <div className={`text-3xl font-black tabular-nums ${disconnectTimer?.paused ? "text-zinc-500" : "text-red-400"}`}>
+                  {String(Math.floor(disconnectMsRemaining / 60000)).padStart(2, "0")}:
+                  {String(Math.floor((disconnectMsRemaining % 60000) / 1000)).padStart(2, "0")}
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Button variant="secondary" onClick={toggleDisconnectPause}>
+                    {disconnectTimer?.paused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+                    {disconnectTimer?.paused ? "Retomar contagem" : "Pausar contagem"}
+                  </Button>
+                  <Button variant="secondary" onClick={sendEndVote}
+                    disabled={!!me && !!gameState.endVote?.votes.includes(me.id)}>
+                    <Flag className="w-4 h-4" />
+                    {gameState.endVote
+                      ? `Votar p/ encerrar (${gameState.endVote.votes.length}/${endVoteQuorum})`
+                      : "Votar para encerrar a partida"}
+                  </Button>
+                  {isHost && (
+                    <Button className="bg-yellow-600 hover:bg-yellow-700 text-white"
+                      onClick={() => setDisconnectTimer((prev) => prev ? { ...prev, dismissed: true } : prev)}>
+                      Continuar mesmo assim
+                    </Button>
+                  )}
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* ── OPPONENTS ── */}
         <div className="flex justify-center gap-8 pt-2 flex-wrap">
@@ -443,13 +702,18 @@ export default function GameBoard({
                 </div>
               )}
 
+              {activePlayerId === p.id && <ActiveArrow direction="down" />}
+
               {/* Avatar */}
               <div className={`bg-zinc-900 border rounded-xl p-3 text-center w-32 shadow-lg transition-all ${
-                gameState.players[gameState.currentPlayerIndex]?.id === p.id
+                activePlayerId === p.id
                   ? "border-yellow-400 shadow-yellow-400/30"
                   : "border-zinc-800"
               }`}>
                 <div className="font-bold text-white truncate text-sm">{p.name}</div>
+                {activePlayerId === p.id && activeActionLabel && (
+                  <div className="flex justify-center"><ActiveBadge label={activeActionLabel} /></div>
+                )}
                 <div className="text-red-400 text-xs font-bold">💀 {p.score} pts</div>
                 <div className="text-zinc-500 text-xs">Aposta: {p.bet !== null ? p.bet : "?"}</div>
                 <div className="text-zinc-400 text-xs">✅ {p.tricks}/{p.bet ?? "?"}</div>
@@ -484,6 +748,11 @@ export default function GameBoard({
               onShuffle={(type) => {
                 if (!me) return;
                 const style: ShuffleStyle = type === "lucas" ? "lucas_supreme" : "random";
+                // Torna público pra mesa toda qual método foi escolhido (só informativo).
+                const announcePayload = { dealerName: me.name, label: SHUFFLE_TYPE_LABELS[type] ?? type };
+                setShuffleAnnouncement(announcePayload);
+                setTimeout(() => setShuffleAnnouncement((cur) => (cur?.dealerName === announcePayload.dealerName ? null : cur)), 4000);
+                channel.send({ type: "broadcast", event: "shuffle_announce", payload: announcePayload });
                 if (isHost) {
                   hostAction((prev) => handleShuffleAndDeal(prev, me.id, style));
                 } else {
@@ -494,7 +763,10 @@ export default function GameBoard({
           )}
 
           {/* Table cards (current trick) */}
-          <div className="relative flex items-center justify-center w-72 h-72 rounded-full border-2 border-dashed border-zinc-700/50">
+          <div
+            className="relative flex items-center justify-center w-72 h-72 rounded-full border-2 border-dashed border-zinc-700/50 bg-cover bg-center overflow-hidden"
+            style={{ backgroundImage: `linear-gradient(rgba(0,0,0,0.55),rgba(0,0,0,0.55)), url(${TABLE_BG[theme] ?? TABLE_BG.aquarium})` }}
+          >
             {gameState.tableCards.length === 0 && gameState.phase !== "shuffling" && (
               <span className="text-zinc-600 font-bold opacity-50 text-sm">MESA VAZIA</span>
             )}
@@ -585,42 +857,38 @@ export default function GameBoard({
               </div>
 
               {/* My avatar */}
-              <div className={`bg-zinc-900 p-3 rounded-t-xl border-t border-l border-r w-44 text-center relative z-20 transition-all ${
-                isMyTurn ? "border-yellow-400 shadow-yellow-400/20 shadow-lg" : "border-zinc-800"
-              }`}>
-                {/* Floating emojis */}
-                {emojis.map((e) => (
-                  <motion.div key={e.id} initial={{ y: 0, opacity: 1, scale: 0.5 }}
-                    animate={{ y: -200, opacity: 0, scale: 2 }} transition={{ duration: 2, ease: "easeOut" }}
-                    className="absolute pointer-events-none text-4xl z-50"
-                    style={{ left: `${e.x}%`, bottom: "100%" }}>
-                    {e.emoji}
-                  </motion.div>
-                ))}
+              <div className="flex flex-col items-center gap-1">
+                {isMeActive && <ActiveArrow direction="down" />}
+                <div className={`bg-zinc-900 p-3 rounded-t-xl border-t border-l border-r w-44 text-center relative z-20 transition-all ${
+                  isMeActive ? "border-yellow-400 shadow-yellow-400/20 shadow-lg" : "border-zinc-800"
+                }`}>
+                  {/* Emoji picker */}
+                  <div className="absolute -top-4 -right-4">
+                    <Popover>
+                      <PopoverTrigger className="rounded-full w-9 h-9 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white shadow-lg flex items-center justify-center">
+                        <SmilePlus className="w-4 h-4" />
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-2 bg-zinc-900 border-zinc-800 flex gap-2" side="top">
+                        {["😂", "🤡", "😡", "💀", "🍻", "🔥"].map((emoji) => (
+                          <button key={emoji}
+                            onClick={() => sendEmoji(emoji)}
+                            className="text-2xl hover:scale-125 transition-transform">
+                            {emoji}
+                          </button>
+                        ))}
+                      </PopoverContent>
+                    </Popover>
+                  </div>
 
-                {/* Emoji picker */}
-                <div className="absolute -top-4 -right-4">
-                  <Popover>
-                    <PopoverTrigger className="rounded-full w-9 h-9 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white shadow-lg flex items-center justify-center">
-                      <SmilePlus className="w-4 h-4" />
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-2 bg-zinc-900 border-zinc-800 flex gap-2" side="top">
-                      {["😂", "🤡", "😡", "💀", "🍻", "🔥"].map((emoji) => (
-                        <button key={emoji}
-                          onClick={() => channel.send({ type: "broadcast", event: "emoji", payload: { emoji } })}
-                          className="text-2xl hover:scale-125 transition-transform">
-                          {emoji}
-                        </button>
-                      ))}
-                    </PopoverContent>
-                  </Popover>
+                  <div className="text-base font-bold text-white">
+                    {me.name}
+                  </div>
+                  {isMeActive && activeActionLabel && (
+                    <div className="flex justify-center"><ActiveBadge label={activeActionLabel} /></div>
+                  )}
+                  <div className="text-red-400 font-bold text-sm">💀 {me.score} pts</div>
+                  <div className="text-zinc-400 text-xs">Vazas: {me.tricks} / {me.bet !== null ? me.bet : "?"}</div>
                 </div>
-
-                <div className="text-base font-bold text-white">
-                  {me.name} {isMyTurn ? "🎯" : ""}
-                </div>
-                <div className="text-red-400 font-bold text-sm">💀 {me.score} pts</div>
-                <div className="text-zinc-400 text-xs">Vazas: {me.tricks} / {me.bet !== null ? me.bet : "?"}</div>
               </div>
 
               {/* Hand cards — layoutId enables card-fly-to-table animation */}
@@ -646,6 +914,37 @@ export default function GameBoard({
         )}
       </div>
     </LayoutGroup>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACTIVE-PLAYER BADGE — small pulsing label showing what the active player is
+// doing right now (embaralhando / apostando / escolhendo carta).
+// ─────────────────────────────────────────────────────────────────────────────
+function ActiveBadge({ label }: { label: string }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -4 }}
+      animate={{ opacity: [0.75, 1, 0.75], y: 0 }}
+      transition={{ opacity: { repeat: Infinity, duration: 1.4 }, y: { duration: 0.2 } }}
+      className="mt-1 inline-flex items-center gap-1 bg-yellow-400/15 border border-yellow-400/50 text-yellow-300 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full whitespace-nowrap">
+      {label}
+    </motion.div>
+  );
+}
+
+// Seta que aponta pro portrait de quem está ativo — "direction" é de onde a
+// seta aponta: "down" fica em cima do avatar (oponentes), "up" fica embaixo
+// (minha área, que já está na parte de baixo da tela).
+function ActiveArrow({ direction }: { direction: "down" | "up" }) {
+  const Icon = direction === "down" ? ChevronDown : ChevronUp;
+  return (
+    <motion.div
+      animate={{ y: direction === "down" ? [0, 6, 0] : [0, -6, 0] }}
+      transition={{ repeat: Infinity, duration: 0.8 }}
+      className="text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.7)]">
+      <Icon className="w-6 h-6" strokeWidth={3} />
+    </motion.div>
   );
 }
 
@@ -784,6 +1083,17 @@ const CARD_BACKS: Record<string, string> = {
   lotr: "/themes/card_back_lotr.jpg",
   mpb: "/themes/card_back_mpb.jpg",
   lgbt: "/themes/card_back_lgbt.jpg",
+};
+
+// Fundo da mesa (a "vaza"), mesma imagem de fundo do tema — só recortada em círculo.
+const TABLE_BG: Record<string, string> = {
+  candy: "/themes/bg_candy.jpg",
+  adventure: "/themes/bg_adventure.jpg",
+  pedro: "/themes/bg_pedro.jpg",
+  aquarium: "/themes/bg_aquarium.jpg",
+  lotr: "/themes/bg_lotr.jpg",
+  mpb: "/themes/bg_mpb.jpg",
+  lgbt: "/themes/bg_lgbt.jpg",
 };
 
 const CARD_BORDERS: Record<string, [string, string]> = {

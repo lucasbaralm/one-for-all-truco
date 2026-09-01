@@ -135,6 +135,7 @@ describe('Full round with multiple tricks', () => {
       ],
       maxCardsLimit: 5,
       hostId: 'p1',
+      endVote: null,
     };
 
     // Vaza 1: P1 joga a manilha (vence de cara), depois P2 e P3.
@@ -198,6 +199,7 @@ describe('Betting - closing rule holds across different round sizes', () => {
         players,
         maxCardsLimit: 5,
         hostId: null,
+        endVote: null,
       };
 
       state = handleBet(state, 'a', Math.min(1, cards));

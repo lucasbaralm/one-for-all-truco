@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createInitialState, startNextRound, handleBet, handlePlayCard, handleShuffleAndDeal, GameState } from './state-machine';
+import { createInitialState, startNextRound, handleBet, handlePlayCard, handleShuffleAndDeal, voteToEndMatch, GameState } from './state-machine';
 import { PlayerPresence } from '@/components/game/RoomManager';
 import { Card, generateDeck } from './rules';
 
@@ -172,7 +172,8 @@ describe('State Machine - Gameplay Flow', () => {
         { id: 'p2', name: 'P2', score: 0, cards: [p2Card], wonCards: [], bet: 1, tricks: 0 }
       ],
       maxCardsLimit: 5,
-      hostId: null
+      hostId: null,
+      endVote: null
     };
 
     // P2 joga
@@ -220,7 +221,8 @@ describe('State Machine - Gameplay Flow', () => {
         { id: 'p2', name: 'P2', score: 2, cards: [p2Card], wonCards: [], bet: 1, tricks: 0 }
       ],
       maxCardsLimit: 5,
-      hostId: null
+      hostId: null,
+      endVote: null
     };
 
     state = handlePlayCard(state, 'p2', 0);
@@ -251,6 +253,7 @@ describe('State Machine - handleBet validation', () => {
     ],
     maxCardsLimit: 5,
     hostId: null,
+    endVote: null,
   };
 
   it('should ignore a bet from a player who is not currently up', () => {
@@ -318,6 +321,7 @@ describe('State Machine - handlePlayCard validation', () => {
     ],
     maxCardsLimit: 5,
     hostId: null,
+    endVote: null,
   };
 
   it('should ignore a play from a player who is not currently up', () => {
@@ -382,5 +386,78 @@ describe('State Machine - round escalation and game over', () => {
     state = { ...state, phase: 'round_end' } as GameState;
     state = startNextRound(state); // pediria 14 cartas, passa do teto de 13
     expect(state.phase).toBe('game_over');
+  });
+});
+
+describe('State Machine - voteToEndMatch', () => {
+  const mockPlayers: PlayerPresence[] = [
+    { id: '1', name: 'Alice', joinedAt: '1' },
+    { id: '2', name: 'Bob', joinedAt: '2' },
+    { id: '3', name: 'Charlie', joinedAt: '3' },
+  ];
+
+  it('starts a new vote with the first voter and does not end the match yet', () => {
+    let state = createInitialState(mockPlayers);
+    state = voteToEndMatch(state, '1', 3);
+    expect(state.endVote?.votes).toEqual(['1']);
+    expect(state.phase).not.toBe('game_over');
+  });
+
+  it('ends the match once at least half the CONNECTED players have voted (rounded up)', () => {
+    let state = createInitialState(mockPlayers); // 3 jogadores na mesa, todos conectados -> precisa de 2 votos
+    state = voteToEndMatch(state, '1', 3);
+    expect(state.phase).not.toBe('game_over');
+
+    state = voteToEndMatch(state, '2', 3);
+    expect(state.phase).toBe('game_over');
+    expect(state.endVote).toBeNull();
+  });
+
+  it('ends the match with exactly half the votes for an even number of connected players', () => {
+    const evenPlayers: PlayerPresence[] = [
+      { id: '1', name: 'Alice', joinedAt: '1' },
+      { id: '2', name: 'Bob', joinedAt: '2' },
+      { id: '3', name: 'Charlie', joinedAt: '3' },
+      { id: '4', name: 'Dana', joinedAt: '4' },
+    ];
+    let state = createInitialState(evenPlayers); // 4 jogadores -> precisa de 2 votos
+    state = voteToEndMatch(state, '1', 4);
+    expect(state.phase).not.toBe('game_over');
+    state = voteToEndMatch(state, '2', 4);
+    expect(state.phase).toBe('game_over');
+  });
+
+  it('bases the majority only on currently-connected players, not the whole roster', () => {
+    // 4 jogadores na mesa (roster), mas só 2 estão conectados agora -> precisa de 1 voto só.
+    const players: PlayerPresence[] = [
+      { id: '1', name: 'Alice', joinedAt: '1' },
+      { id: '2', name: 'Bob', joinedAt: '2' },
+      { id: '3', name: 'Charlie', joinedAt: '3' },
+      { id: '4', name: 'Dana', joinedAt: '4' },
+    ];
+    let state = createInitialState(players);
+    state = voteToEndMatch(state, '1', 2); // só Alice e Bob conectados
+    expect(state.phase).toBe('game_over'); // 1 voto já é metade de 2 conectados
+  });
+
+  it('ignores a duplicate vote from the same player', () => {
+    let state = createInitialState(mockPlayers);
+    state = voteToEndMatch(state, '1', 3);
+    state = voteToEndMatch(state, '1', 3); // vota de novo
+    expect(state.endVote?.votes).toEqual(['1']);
+    expect(state.phase).not.toBe('game_over');
+  });
+
+  it('ignores a vote from someone not at the table', () => {
+    let state = createInitialState(mockPlayers);
+    const next = voteToEndMatch(state, 'ghost', 3);
+    expect(next).toBe(state);
+  });
+
+  it('does nothing once the match is already over', () => {
+    let state = createInitialState(mockPlayers);
+    state = { ...state, phase: 'game_over' };
+    const next = voteToEndMatch(state, '1', 3);
+    expect(next).toBe(state);
   });
 });

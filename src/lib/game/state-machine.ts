@@ -29,6 +29,9 @@ export interface GameState {
   // autoridade de host seja "pegajosa" — sobrevive a reconexões e não muda de volta
   // para um host antigo que retorna depois que outro jogador já assumiu.
   hostId: string | null;
+  // Votação em andamento para encerrar a partida antes da hora (precisa de
+  // pelo menos metade da mesa). null = nenhuma votação ativa no momento.
+  endVote: { votes: string[] } | null;
 }
 
 /**
@@ -54,7 +57,32 @@ export function createInitialState(playerPresence: { id: string, name: string }[
     tableCards: [],
     maxCardsLimit: 5, // Sobe até 5 cartas (máximo padrão da Fodinha rápida)
     hostId: null, // Definido pela UI assim que alguém assume a autoridade de host
+    endVote: null,
   };
+}
+
+/**
+ * Registra o voto de um jogador para encerrar a partida antes da hora.
+ * Cria a votação se ainda não existir uma ativa. Quando pelo menos metade
+ * dos jogadores CONECTADOS no momento (arredondando pra cima) já votou, a
+ * partida acaba imediatamente — não importa em que fase estava.
+ *
+ * `eligibleVoterCount` é decidido por quem chama (a UI, que sabe quem está
+ * conectado agora via presença) — esta função não tem acesso a rede/presença,
+ * só decide a regra em cima do número que recebe.
+ */
+export function voteToEndMatch(state: GameState, playerId: string, eligibleVoterCount: number): GameState {
+  if (state.phase === 'game_over') return state;
+  if (!state.players.some(p => p.id === playerId)) return state;
+
+  const currentVotes = state.endVote?.votes ?? [];
+  if (currentVotes.includes(playerId)) return state; // já votou
+
+  const votes = [...currentVotes, playerId];
+  if (votes.length * 2 >= eligibleVoterCount) {
+    return { ...state, phase: 'game_over', endVote: null };
+  }
+  return { ...state, endVote: { votes } };
 }
 
 export function startNextRound(state: GameState): GameState {
