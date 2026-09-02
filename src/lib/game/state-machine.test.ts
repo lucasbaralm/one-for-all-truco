@@ -57,10 +57,13 @@ describe('State Machine - Setup', () => {
     state = handlePlayCard(state, '2', 0);
     state = handlePlayCard(state, '1', 0);
     expect(state.phase).toBe('round_end');
+    // A última vaza fica na mesa em round_end, pra UI segurar visível antes do placar.
+    expect(state.tableCards).toHaveLength(2);
 
     state = startNextRound(state); // Ronda 2: dealer roda para Bob (1)
     expect(state.dealerIndex).toBe(1);
     expect(state.currentRoundCards).toBe(2);
+    expect(state.tableCards).toHaveLength(0); // limpa pra rodada nova
   });
 });
 

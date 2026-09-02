@@ -149,7 +149,7 @@ export default function RoomManager({ roomId }: { roomId: string }) {
 
   if (status === "connecting") {
     return (
-      <div className="flex flex-col items-center justify-center space-y-4 h-[90vh] text-zinc-400">
+      <div className="flex flex-col items-center justify-center space-y-4 flex-1 text-zinc-400">
         <Loader2 className="w-10 h-10 animate-spin text-red-500" />
         <p>Conectando à sala {roomId}...</p>
       </div>

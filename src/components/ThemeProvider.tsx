@@ -2,7 +2,9 @@
 
 import React, { createContext, useContext, useEffect, useState } from "react";
 
-export type Theme = "aquarium" | "candy" | "adventure" | "pedro" | "lotr" | "mpb" | "lgbt";
+export type Theme = "aquarium" | "candy" | "adventure" | "pedro" | "lotr" | "mpb" | "lgbt" | "olivia" | "gatos" | "mamadores" | "jessie";
+
+const ALL_THEMES: Theme[] = ["aquarium", "candy", "adventure", "pedro", "lotr", "mpb", "lgbt", "olivia", "gatos", "mamadores", "jessie"];
 
 interface ThemeContextType {
   theme: Theme;
@@ -19,6 +21,10 @@ const THEME_BG: Record<Theme, string> = {
   lotr: "/themes/bg_lotr.jpg",
   mpb: "/themes/bg_mpb.jpg",
   lgbt: "/themes/bg_lgbt.jpg",
+  olivia: "/themes/bg_olivia.png",
+  gatos: "/themes/bg_gatos.jpg",
+  mamadores: "/themes/bg_mamadores.jpg",
+  jessie: "/themes/bg_jessie.jpg",
 };
 
 const THEME_OVERLAY: Record<Theme, string> = {
@@ -29,6 +35,10 @@ const THEME_OVERLAY: Record<Theme, string> = {
   lotr: "bg-black/60",
   mpb: "bg-black/50",
   lgbt: "bg-black/55",
+  olivia: "bg-black/60",
+  gatos: "bg-black/55",
+  mamadores: "bg-black/55",
+  jessie: "bg-black/60",
 };
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -37,7 +47,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const savedTheme = localStorage.getItem("fodinha_theme") as Theme;
-    if (savedTheme && ["aquarium", "candy", "adventure", "pedro", "lotr", "mpb", "lgbt"].includes(savedTheme)) {
+    if (savedTheme && ALL_THEMES.includes(savedTheme)) {
       setThemeState(savedTheme);
     }
     setMounted(true);

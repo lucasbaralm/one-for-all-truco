@@ -172,6 +172,11 @@ describe('Full round with multiple tricks', () => {
 
     // hostId (metadado de rede) sobrevive à rodada sem ser mexido pelas regras do jogo.
     expect(state.hostId).toBe('p1');
+
+    // A última vaza fica visível na mesa em 'round_end' (não é limpa) — dá tempo
+    // da UI mostrar o que o último jogador jogou antes de trocar pro placar.
+    expect(state.tableCards).toHaveLength(3);
+    expect(state.tableCards.map(tc => tc.playerId)).toEqual(['p1', 'p2', 'p3']);
   });
 });
 

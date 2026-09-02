@@ -264,7 +264,10 @@ export function handlePlayCard(state: GameState, playerId: string, cardIndexInHa
         ...state,
         phase: 'round_end',
         players: playersWithScores,
-        tableCards: [], // Limpa a mesa
+        // Mantém a última vaza na mesa (não limpa) — a UI segura essa vaza
+        // visível por um tempo antes de mostrar o placar, pra dar tempo de
+        // ver o que o último jogador jogou. startNextRound() limpa depois.
+        tableCards: newTableCards,
       };
     }
 

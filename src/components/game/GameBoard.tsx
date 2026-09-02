@@ -34,6 +34,9 @@ const SHUFFLE_TYPE_LABELS: Record<string, string> = {
 };
 
 const DISCONNECT_WAIT_MS = 5 * 60 * 1000;
+// Quanto tempo a última vaza da rodada fica parada na mesa (sem voar pro
+// vencedor) antes do placar aparecer — dá tempo de ver o que foi jogado.
+const LAST_TRICK_REVEAL_MS = 3000;
 
 interface GameBoardProps {
   roomId: string;
@@ -93,6 +96,19 @@ export default function GameBoard({
 
   // Unique key per round so layoutId doesn't conflict across rounds
   const roundKey = gameState?.currentRoundCards ?? 0;
+
+  // Ao entrar em 'round_end', segura a mesa (mostrando a última vaza, parada)
+  // por LAST_TRICK_REVEAL_MS antes de liberar o placar — em todo cliente,
+  // não só no host, já que todo mundo recebe a mesma vaza final via sync.
+  const [scoreboardReady, setScoreboardReady] = useState(false);
+  useEffect(() => {
+    if (gameState?.phase !== "round_end") {
+      setScoreboardReady(false);
+      return;
+    }
+    const t = setTimeout(() => setScoreboardReady(true), LAST_TRICK_REVEAL_MS);
+    return () => clearTimeout(t);
+  }, [gameState?.phase]);
 
   // ── Sticky host authority ────────────────────────────────────────────────
   // `presenceIsHost` (from RoomManager) is purely "who joined earliest and is
@@ -223,7 +239,8 @@ export default function GameBoard({
         }).then();
       }
 
-      // Auto-advance from round_end → next round after showing scoreboard
+      // Auto-advance from round_end → next round. First LAST_TRICK_REVEAL_MS shows
+      // the final trick as it was played, then the scoreboard for 3s, then advances.
       if (next.phase === "round_end") {
         setTimeout(() => {
           setGameState((cur) => {
@@ -233,7 +250,7 @@ export default function GameBoard({
             channel.send({ type: "broadcast", event: "sync_state", payload: advanced });
             return advanced;
           });
-        }, 3000); // Show scoreboard for 3 seconds
+        }, LAST_TRICK_REVEAL_MS + 3000);
       }
 
       return next;
@@ -386,7 +403,7 @@ export default function GameBoard({
   // ── Guard: waiting for state ─────────────────────────────────────────────
   if (!gameState) {
     return (
-      <div className="text-white flex flex-col items-center justify-center h-[90vh] gap-4">
+      <div className="text-white flex flex-col items-center justify-center flex-1 gap-4">
         <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
           className="w-10 h-10 border-4 border-red-500 border-t-transparent rounded-full" />
         <span className="text-zinc-400">Carregando a mesa...</span>
@@ -395,10 +412,13 @@ export default function GameBoard({
   }
 
   // ── Round end scoreboard (shown 3s, then auto-advances) ──────────────────
-  if (gameState.phase === "round_end") {
+  // Antes disso, gameState.phase já é "round_end" mas scoreboardReady ainda não
+  // — nesse intervalo cai pro render principal, que mostra a última vaza parada
+  // na mesa (ver LAST_TRICK_REVEAL_MS acima).
+  if (gameState.phase === "round_end" && scoreboardReady) {
     const sorted = [...gameState.players].sort((a, b) => a.score - b.score);
     return (
-      <div className="flex flex-col items-center justify-center h-[90vh] text-white space-y-6">
+      <div className="flex flex-col items-center justify-center flex-1 text-white space-y-6">
         <motion.h2 initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring" }}
           className="text-4xl font-black text-yellow-400">
           🃏 FIM DO ROUND {gameState.currentRoundCards}
@@ -436,7 +456,7 @@ export default function GameBoard({
   if (gameState.phase === "game_over") {
     const sorted = [...gameState.players].sort((a, b) => a.score - b.score);
     return (
-      <div className="flex flex-col items-center justify-center h-[90vh] text-white space-y-8">
+      <div className="flex flex-col items-center justify-center flex-1 text-white space-y-8">
         <motion.h1 initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring" }}
           className="text-5xl font-black text-red-500 mb-6">
           FIM DE JOGO
@@ -483,6 +503,9 @@ export default function GameBoard({
   // ── Derived state ────────────────────────────────────────────────────────
   const me = gameState.players.find((p) => p.name === playerName);
   const others = gameState.players.filter((p) => p.name !== playerName);
+  // Com 4+ adversários encolhe mais os avatares/gap, pra caber mais gente por
+  // linha e precisar de menos (ou nenhuma) quebra de linha — em mobile e desktop.
+  const manyOpponents = others.length >= 4;
   const isBlindRound = gameState.currentRoundCards === 1;
   // Quórum da votação de encerrar: metade de quem está CONECTADO agora, não da mesa toda.
   // (usa a prop initialPlayers direto, não a ref — isso aqui é render, não callback assíncrono)
@@ -565,7 +588,10 @@ export default function GameBoard({
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <LayoutGroup>
-      <div className="flex flex-col h-[90vh] justify-between relative overflow-hidden">
+      {/* min-h (não h fixo) + overflow-x só: com 4+ jogadores os oponentes podem
+          quebrar em mais de uma linha — deixa a página crescer/rolar em vez de
+          cortar conteúdo, mas nunca estoura a largura pros lados. */}
+      <div className="flex flex-col flex-1 justify-between relative overflow-x-hidden">
 
         {/* ── FLOATING EMOJIS: fly from whoever sent it, in to the table center ── */}
         {/* z-[60]: acima do popup do emoji picker (z-50), senão fica escondido atrás dele */}
@@ -594,20 +620,24 @@ export default function GameBoard({
         </div>
 
         {/* ── TOOLBAR: voltar ao menu + votar para encerrar ── */}
-        <div className="absolute top-2 left-2 z-30 flex items-center gap-2">
+        {/* No mobile fica numa 2ª linha, embaixo do seletor de tema (que ocupa o
+            canto direito inteiro) — em telas largas os dois cabem lado a lado. */}
+        <div className="absolute top-9 left-1 sm:top-2 sm:left-2 z-30 flex items-center gap-1 sm:gap-2 max-w-[70vw] sm:max-w-none">
           <button
             onClick={() => setShowLeaveConfirm(true)}
-            className="flex items-center gap-1.5 bg-black/50 hover:bg-black/70 border border-white/10 text-zinc-300 hover:text-white text-xs font-bold px-3 py-2 rounded-xl backdrop-blur-sm transition-all">
-            <LogOut className="w-3.5 h-3.5" /> Menu
+            className="flex items-center gap-1 sm:gap-1.5 bg-black/50 hover:bg-black/70 border border-white/10 text-zinc-300 hover:text-white text-[10px] sm:text-xs font-bold px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg sm:rounded-xl backdrop-blur-sm transition-all shrink-0">
+            <LogOut className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> Menu
           </button>
           <button
             onClick={sendEndVote}
             disabled={!!me && !!gameState.endVote?.votes.includes(me.id)}
-            className="flex items-center gap-1.5 bg-black/50 hover:bg-red-900/40 border border-white/10 hover:border-red-500/50 text-zinc-300 hover:text-white text-xs font-bold px-3 py-2 rounded-xl backdrop-blur-sm transition-all disabled:opacity-60 disabled:cursor-default">
-            <Flag className="w-3.5 h-3.5" />
-            {gameState.endVote
-              ? `Encerrar (${gameState.endVote.votes.length}/${endVoteQuorum})`
-              : "Votar p/ Encerrar"}
+            className="flex items-center gap-1 sm:gap-1.5 bg-black/50 hover:bg-red-900/40 border border-white/10 hover:border-red-500/50 text-zinc-300 hover:text-white text-[10px] sm:text-xs font-bold px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg sm:rounded-xl backdrop-blur-sm transition-all disabled:opacity-60 disabled:cursor-default min-w-0 truncate">
+            <Flag className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+            <span className="truncate">
+              {gameState.endVote
+                ? `Encerrar (${gameState.endVote.votes.length}/${endVoteQuorum})`
+                : "Votar p/ Encerrar"}
+            </span>
           </button>
         </div>
 
@@ -682,12 +712,12 @@ export default function GameBoard({
         </AnimatePresence>
 
         {/* ── OPPONENTS ── */}
-        <div className="flex justify-center gap-8 pt-2 flex-wrap">
+        <div className={`flex justify-center flex-wrap px-1 pt-16 sm:pt-2 ${manyOpponents ? "gap-1 sm:gap-3" : "gap-2 sm:gap-8"}`}>
           {others.map((p) => (
-            <div key={p.id} className="flex flex-col items-center gap-2">
+            <div key={p.id} className="flex flex-col items-center gap-1 sm:gap-2">
               {/* Won-cards piles */}
               {p.wonCards && p.wonCards.length > 0 && (
-                <div className="flex gap-1">
+                <div className="hidden sm:flex gap-1">
                   {p.wonCards.map((trick, trickIdx) => (
                     <motion.div key={trickIdx} initial={{ scale: 0, y: -20 }}
                       animate={{ scale: 0.45, y: 0 }} className="relative w-24 h-36 origin-top-left">
@@ -704,26 +734,27 @@ export default function GameBoard({
 
               {activePlayerId === p.id && <ActiveArrow direction="down" />}
 
-              {/* Avatar */}
-              <div className={`bg-zinc-900 border rounded-xl p-3 text-center w-32 shadow-lg transition-all ${
+              {/* Avatar — w-fit com min-w: cresce se o conteúdo (badge "APOSTANDO"
+                  etc.) não couber no tamanho padrão, em vez de cortar/estourar. */}
+              <div className={`bg-zinc-900 border rounded-lg sm:rounded-xl p-1.5 sm:p-3 text-center shadow-lg transition-all w-fit max-w-[40vw] sm:max-w-none ${manyOpponents ? "min-w-16 sm:min-w-24" : "min-w-20 sm:min-w-32"} ${
                 activePlayerId === p.id
                   ? "border-yellow-400 shadow-yellow-400/30"
                   : "border-zinc-800"
               }`}>
-                <div className="font-bold text-white truncate text-sm">{p.name}</div>
+                <div className="font-bold text-white text-[11px] sm:text-sm whitespace-nowrap">{p.name}</div>
                 {activePlayerId === p.id && activeActionLabel && (
                   <div className="flex justify-center"><ActiveBadge label={activeActionLabel} /></div>
                 )}
-                <div className="text-red-400 text-xs font-bold">💀 {p.score} pts</div>
-                <div className="text-zinc-500 text-xs">Aposta: {p.bet !== null ? p.bet : "?"}</div>
-                <div className="text-zinc-400 text-xs">✅ {p.tricks}/{p.bet ?? "?"}</div>
+                <div className="text-red-400 text-[10px] sm:text-xs font-bold">💀 {p.score} pts</div>
+                <div className="text-zinc-500 text-[10px] sm:text-xs">Aposta: {p.bet !== null ? p.bet : "?"}</div>
+                <div className="text-zinc-400 text-[10px] sm:text-xs">✅ {p.tricks}/{p.bet ?? "?"}</div>
                 {isBlindRound && p.cards.length > 0 ? (
-                  <div className="mt-2 flex justify-center scale-75 origin-top">
+                  <div className="mt-1 sm:mt-2 flex justify-center scale-75 sm:scale-75 origin-top">
                     {/* Rodada cega: você vê a carta dos outros, só não a sua */}
                     <PlayingCard card={p.cards[0]} theme={theme} />
                   </div>
                 ) : (
-                  <div className="text-zinc-500 text-xs mt-1">🃏 {p.cards.length} cartas</div>
+                  <div className="text-zinc-500 text-[10px] sm:text-xs mt-1">🃏 {p.cards.length} cartas</div>
                 )}
               </div>
             </div>
@@ -734,8 +765,8 @@ export default function GameBoard({
         <div className="flex-1 flex items-center justify-center relative">
           {/* Vira card */}
           {gameState.vira && (
-            <div className="absolute left-4 top-1/2 -translate-y-1/2 flex flex-col items-center">
-              <span className="text-zinc-400 font-bold mb-1 uppercase tracking-widest text-xs">Vira</span>
+            <div className="absolute left-1 sm:left-4 top-1/2 -translate-y-1/2 flex flex-col items-center">
+              <span className="text-zinc-400 font-bold mb-1 uppercase tracking-widest text-[10px] sm:text-xs">Vira</span>
               <PlayingCard card={gameState.vira} theme={theme} />
             </div>
           )}
@@ -762,9 +793,17 @@ export default function GameBoard({
             />
           )}
 
+          {/* Última vaza da rodada, parada na mesa antes do placar aparecer */}
+          {gameState.phase === "round_end" && !scoreboardReady && (
+            <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+              className="absolute -top-6 left-1/2 -translate-x-1/2 z-20 text-yellow-300 text-xs font-bold uppercase tracking-wide whitespace-nowrap">
+              Última jogada da rodada
+            </motion.div>
+          )}
+
           {/* Table cards (current trick) */}
           <div
-            className="relative flex items-center justify-center w-72 h-72 rounded-full border-2 border-dashed border-zinc-700/50 bg-cover bg-center overflow-hidden"
+            className="relative flex items-center justify-center w-44 h-44 sm:w-72 sm:h-72 rounded-full border-2 border-dashed border-zinc-700/50 bg-cover bg-center overflow-hidden"
             style={{ backgroundImage: `linear-gradient(rgba(0,0,0,0.55),rgba(0,0,0,0.55)), url(${TABLE_BG[theme] ?? TABLE_BG.aquarium})` }}
           >
             {gameState.tableCards.length === 0 && gameState.phase !== "shuffling" && (
@@ -782,7 +821,7 @@ export default function GameBoard({
                     opacity: 1,
                     scale: isWinning ? 1.12 : 1,
                     y: isWinning ? -14 : 0,
-                    x: (idx - (gameState.tableCards.length - 1) / 2) * 30,
+                    x: (idx - (gameState.tableCards.length - 1) / 2) * (typeof window !== "undefined" && window.innerWidth < 640 ? 20 : 30),
                     rotate: (idx - 1) * 7,
                     zIndex: isWinning ? 50 : idx,
                   }}
@@ -819,28 +858,28 @@ export default function GameBoard({
 
         {/* ── MY AREA ── */}
         {me && (
-          <div className="flex flex-col items-center gap-2 pb-2">
+          <div className="flex flex-col items-center gap-1 sm:gap-2 pb-1 sm:pb-2">
             {/* Bet prompt */}
             {gameState.phase === "betting" &&
               gameState.players[gameState.currentPlayerIndex]?.name === playerName && (
                 <motion.div initial={{ y: 30, opacity: 0 }} animate={{ y: 0, opacity: 1 }}
-                  className="bg-red-900/40 border border-red-500 p-4 rounded-xl text-center space-y-3 shadow-[0_0_30px_rgba(220,38,38,0.2)]">
-                  <h3 className="text-white font-bold text-lg">Sua vez! Quantas você faz?</h3>
+                  className="bg-red-900/40 border border-red-500 p-2 sm:p-4 rounded-xl text-center space-y-2 sm:space-y-3 shadow-[0_0_30px_rgba(220,38,38,0.2)] mx-2">
+                  <h3 className="text-white font-bold text-sm sm:text-lg">Sua vez! Quantas você faz?</h3>
                   {forbiddenBet !== null && forbiddenBet >= 0 && forbiddenBet <= me.cards.length && (
-                    <p className="text-red-300 text-xs">Você não pode fechar a rodada apostando {forbiddenBet}</p>
+                    <p className="text-red-300 text-[10px] sm:text-xs">Você não pode fechar a rodada apostando {forbiddenBet}</p>
                   )}
-                  <div className="flex gap-2 flex-wrap justify-center">
+                  <div className="flex gap-1.5 sm:gap-2 flex-wrap justify-center">
                     {Array.from({ length: me.cards.length + 1 }).map((_, i) => (
                       <Button key={i} onClick={() => sendBet(i)} variant="secondary" disabled={i === forbiddenBet}
-                        className="w-10 h-10 font-bold disabled:opacity-30 disabled:cursor-not-allowed">{i}</Button>
+                        className="w-8 h-8 sm:w-10 sm:h-10 text-sm sm:text-base font-bold disabled:opacity-30 disabled:cursor-not-allowed">{i}</Button>
                     ))}
                   </div>
                 </motion.div>
               )}
 
-            <div className="flex items-end gap-4 w-full justify-center px-4">
+            <div className="flex items-end gap-1 sm:gap-4 w-full justify-center px-1 sm:px-4">
               {/* Won-cards pile */}
-              <div className="flex gap-1 items-end min-w-[60px]">
+              <div className="hidden sm:flex gap-1 items-end min-w-[60px]">
                 <AnimatePresence>
                   {me.wonCards && me.wonCards.map((trick, trickIdx) => (
                     <motion.div key={trickIdx} initial={{ scale: 0, y: 20 }} animate={{ scale: 0.5, y: 0 }}
@@ -857,16 +896,16 @@ export default function GameBoard({
               </div>
 
               {/* My avatar */}
-              <div className="flex flex-col items-center gap-1">
+              <div className="flex flex-col items-center gap-1 shrink-0">
                 {isMeActive && <ActiveArrow direction="down" />}
-                <div className={`bg-zinc-900 p-3 rounded-t-xl border-t border-l border-r w-44 text-center relative z-20 transition-all ${
+                <div className={`bg-zinc-900 p-1.5 sm:p-3 rounded-t-lg sm:rounded-t-xl border-t border-l border-r w-fit min-w-24 sm:min-w-44 max-w-[55vw] sm:max-w-none text-center relative z-20 transition-all ${
                   isMeActive ? "border-yellow-400 shadow-yellow-400/20 shadow-lg" : "border-zinc-800"
                 }`}>
                   {/* Emoji picker */}
-                  <div className="absolute -top-4 -right-4">
+                  <div className="absolute -top-3 -right-3 sm:-top-4 sm:-right-4">
                     <Popover>
-                      <PopoverTrigger className="rounded-full w-9 h-9 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white shadow-lg flex items-center justify-center">
-                        <SmilePlus className="w-4 h-4" />
+                      <PopoverTrigger className="rounded-full w-7 h-7 sm:w-9 sm:h-9 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-white shadow-lg flex items-center justify-center">
+                        <SmilePlus className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                       </PopoverTrigger>
                       <PopoverContent className="w-auto p-2 bg-zinc-900 border-zinc-800 flex gap-2" side="top">
                         {["😂", "🤡", "😡", "💀", "🍻", "🔥"].map((emoji) => (
@@ -880,19 +919,19 @@ export default function GameBoard({
                     </Popover>
                   </div>
 
-                  <div className="text-base font-bold text-white">
+                  <div className="text-[11px] sm:text-base font-bold text-white whitespace-nowrap">
                     {me.name}
                   </div>
                   {isMeActive && activeActionLabel && (
                     <div className="flex justify-center"><ActiveBadge label={activeActionLabel} /></div>
                   )}
-                  <div className="text-red-400 font-bold text-sm">💀 {me.score} pts</div>
-                  <div className="text-zinc-400 text-xs">Vazas: {me.tricks} / {me.bet !== null ? me.bet : "?"}</div>
+                  <div className="text-red-400 font-bold text-[10px] sm:text-sm">💀 {me.score} pts</div>
+                  <div className="text-zinc-400 text-[10px] sm:text-xs">Vazas: {me.tricks} / {me.bet !== null ? me.bet : "?"}</div>
                 </div>
               </div>
 
               {/* Hand cards — layoutId enables card-fly-to-table animation */}
-              <div className="flex -space-x-6 z-30 relative">
+              <div className="flex -space-x-4 sm:-space-x-6 z-30 relative">
                 {me.cards.map((c, i) => (
                   <motion.div
                     key={`hand-${roundKey}-${c.suit}-${c.value}`}
@@ -901,7 +940,7 @@ export default function GameBoard({
                     transition={{ type: "spring", stiffness: 300, damping: 25 }}
                     onClick={() => sendPlayCard(i)}
                     className={`relative ${isMyTurn ? "cursor-pointer hover:shadow-2xl hover:shadow-yellow-400/30" : "cursor-not-allowed opacity-80"}`}>
-                    <PlayingCard card={c} hidden={isBlindRound} theme={theme} />
+                    <PlayingCard card={c} hidden={isBlindRound} theme={theme} backIndex={i} />
                     {isMyTurn && (
                       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                         className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 bg-yellow-400 rounded-full" />
@@ -942,8 +981,8 @@ function ActiveArrow({ direction }: { direction: "down" | "up" }) {
     <motion.div
       animate={{ y: direction === "down" ? [0, 6, 0] : [0, -6, 0] }}
       transition={{ repeat: Infinity, duration: 0.8 }}
-      className="text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.7)]">
-      <Icon className="w-6 h-6" strokeWidth={3} />
+      className="text-yellow-400 drop-shadow-[0_0_8px_rgba(250,204,21,0.8)]">
+      <Icon className="w-9 h-9 sm:w-11 sm:h-11" strokeWidth={3} />
     </motion.div>
   );
 }
@@ -969,9 +1008,9 @@ function ShufflePanel({
       className="absolute inset-0 flex items-center justify-center flex-col z-50 bg-black/70 rounded-full backdrop-blur-md gap-4 px-4">
       {isDealer ? (
         <>
-          <span className="text-white font-black text-lg text-center">Sua vez de embaralhar!</span>
-          <span className="text-zinc-400 text-sm text-center">Escolha como quer embaralhar:</span>
-          <div className="flex gap-3 flex-wrap justify-center">
+          <span className="text-white font-black text-sm sm:text-lg text-center px-2">Sua vez de embaralhar!</span>
+          <span className="text-zinc-400 text-xs sm:text-sm text-center px-2">Escolha como quer embaralhar:</span>
+          <div className="flex gap-1.5 sm:gap-3 flex-wrap justify-center px-2">
             {[
               { type: "cut" as ShuffleType, label: "✂️ Cortar", desc: "Divide ao meio" },
               { type: "riffle" as ShuffleType, label: "🎴 Riffle", desc: "Entrelaçar" },
@@ -981,20 +1020,22 @@ function ShufflePanel({
               <motion.button key={type} whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}
                 onHoverStart={() => setPreview(type)} onHoverEnd={() => setPreview(null)}
                 onClick={() => onShuffle(type)}
-                className={`flex flex-col items-center gap-1 bg-zinc-900 border px-5 py-3 rounded-xl transition-all text-white ${
+                className={`flex flex-col items-center gap-0.5 sm:gap-1 bg-zinc-900 border px-2.5 py-2 sm:px-5 sm:py-3 rounded-lg sm:rounded-xl transition-all text-white w-[76px] sm:w-auto ${
                   type === "lucas"
                     ? "border-yellow-600 hover:border-yellow-400 hover:bg-yellow-900/20"
                     : "border-zinc-700 hover:border-red-500 hover:bg-red-900/20"
                 }`}>
-                <span className="text-2xl">{label.split(" ")[0]}</span>
-                <span className="font-bold text-sm">{label.split(" ").slice(1).join(" ")}</span>
-                <span className="text-zinc-500 text-xs">{desc}</span>
+                <span className="text-lg sm:text-2xl">{label.split(" ")[0]}</span>
+                <span className="font-bold text-[10px] sm:text-sm text-center leading-tight">{label.split(" ").slice(1).join(" ")}</span>
+                <span className="text-zinc-500 text-[9px] sm:text-xs hidden sm:block">{desc}</span>
               </motion.button>
             ))}
           </div>
-          <AnimatePresence mode="wait">
-            {preview && <DeckAnimation type={preview} key={preview} />}
-          </AnimatePresence>
+          <div className="hidden sm:block">
+            <AnimatePresence mode="wait">
+              {preview && <DeckAnimation type={preview} key={preview} />}
+            </AnimatePresence>
+          </div>
         </>
       ) : (
         <div className="flex flex-col items-center gap-3">
@@ -1075,14 +1116,21 @@ function DeckAnimation({ type }: { type: ShuffleType }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // PLAYING CARD
 // ─────────────────────────────────────────────────────────────────────────────
-const CARD_BACKS: Record<string, string> = {
-  candy: "/themes/card_back_candy.jpg",
-  adventure: "/themes/card_back_adventure.jpg",
-  pedro: "/themes/card_back_pedro.jpg",
-  aquarium: "/themes/card_back_aquarium.jpg",
-  lotr: "/themes/card_back_lotr.jpg",
-  mpb: "/themes/card_back_mpb.jpg",
-  lgbt: "/themes/card_back_lgbt.jpg",
+// Cada tema pode ter mais de uma imagem de verso — a carta N da mão usa
+// images[N % images.length], ou seja, alterna: 1ª carta pega a 1ª imagem, 2ª
+// carta pega a 2ª, e assim por diante, repetindo do início quando acabam.
+const CARD_BACKS: Record<string, string[]> = {
+  candy: ["/themes/card_back_candy.jpg"],
+  adventure: ["/themes/card_back_adventure.jpg"],
+  pedro: ["/themes/card_back_pedro.png"],
+  aquarium: ["/themes/card_back_aquarium.jpg"],
+  lotr: ["/themes/card_back_lotr.jpg"],
+  mpb: ["/themes/card_back_mpb.jpg"],
+  lgbt: ["/themes/card_back_lgbt.jpg"],
+  olivia: ["/themes/card_back_olivia_1.png", "/themes/card_back_olivia_2.png", "/themes/card_back_olivia_3.jpg"],
+  gatos: ["/themes/card_back_gatos_1.jpg", "/themes/card_back_gatos_2.jpg"],
+  mamadores: ["/themes/card_back_mamadores_1.jpg", "/themes/card_back_mamadores_2.jpg"],
+  jessie: ["/themes/card_back_jessie_1.jpg"],
 };
 
 // Fundo da mesa (a "vaza"), mesma imagem de fundo do tema — só recortada em círculo.
@@ -1094,6 +1142,10 @@ const TABLE_BG: Record<string, string> = {
   lotr: "/themes/bg_lotr.jpg",
   mpb: "/themes/bg_mpb.jpg",
   lgbt: "/themes/bg_lgbt.jpg",
+  olivia: "/themes/bg_olivia.png",
+  gatos: "/themes/bg_gatos.jpg",
+  mamadores: "/themes/bg_mamadores.jpg",
+  jessie: "/themes/bg_jessie.jpg",
 };
 
 const CARD_BORDERS: Record<string, [string, string]> = {
@@ -1104,22 +1156,32 @@ const CARD_BORDERS: Record<string, [string, string]> = {
   lotr: ["border-amber-500", "border-stone-400"],
   mpb: ["border-orange-600", "border-teal-600"],
   lgbt: ["border-rose-500", "border-indigo-500"],
+  olivia: ["border-orange-400", "border-amber-700"],
+  gatos: ["border-purple-400", "border-slate-500"],
+  mamadores: ["border-red-400", "border-yellow-500"],
+  jessie: ["border-rose-400", "border-pink-600"],
 };
 
 function PlayingCard({
   card,
   hidden = false,
   theme = "aquarium",
+  backIndex = 0,
 }: {
   card: GameCard;
   hidden?: boolean;
   theme?: string;
+  // Posição da carta na mão (0 = 1ª carta) — decide qual verso mostrar, quando
+  // o tema tem mais de uma imagem de verso (ver CARD_BACKS acima).
+  backIndex?: number;
 }) {
   if (hidden) {
+    const backs = CARD_BACKS[theme] ?? CARD_BACKS.aquarium;
+    const back = backs[backIndex % backs.length];
     return (
       <div
-        className="w-20 h-28 rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.6)] border-2 border-white/20 bg-cover bg-center overflow-hidden select-none"
-        style={{ backgroundImage: `url(${CARD_BACKS[theme] ?? CARD_BACKS.aquarium})` }}
+        className="w-12 h-16 sm:w-20 sm:h-28 rounded-lg sm:rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.6)] border-2 border-white/20 bg-cover bg-center overflow-hidden select-none"
+        style={{ backgroundImage: `url(${back})` }}
       />
     );
   }
@@ -1130,12 +1192,12 @@ function PlayingCard({
 
   return (
     <div
-      className={`w-20 h-28 bg-white/96 backdrop-blur-sm rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.5)] flex flex-col justify-between p-1.5 border-2 ${isRed ? redBorder : blackBorder} ${isRed ? "text-red-600" : "text-zinc-900"} select-none`}>
-      <div className="text-base font-bold leading-none">{card.value}</div>
+      className={`w-12 h-16 sm:w-20 sm:h-28 bg-white/96 backdrop-blur-sm rounded-lg sm:rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.5)] flex flex-col justify-between p-1 sm:p-1.5 border-2 ${isRed ? redBorder : blackBorder} ${isRed ? "text-red-600" : "text-zinc-900"} select-none`}>
+      <div className="text-[10px] sm:text-base font-bold leading-none">{card.value}</div>
       <div className="flex-1 flex items-center justify-center">
-        <Icon className="w-8 h-8 fill-current" />
+        <Icon className="w-4 h-4 sm:w-8 sm:h-8 fill-current" />
       </div>
-      <div className="text-base font-bold leading-none rotate-180">{card.value}</div>
+      <div className="text-[10px] sm:text-base font-bold leading-none rotate-180">{card.value}</div>
     </div>
   );
 }
