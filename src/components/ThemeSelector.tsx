@@ -26,18 +26,16 @@ function ThemeButton({
   t,
   active,
   onClick,
-  size = "normal",
 }: {
   t: (typeof THEMES)[number];
   active: boolean;
   onClick: () => void;
-  size?: "normal" | "small";
 }) {
   return (
     <button
       title={t.label}
       onClick={onClick}
-      className={`${size === "small" ? "w-6 h-6 text-xs rounded" : "w-9 h-9 text-lg rounded-lg"} flex items-center justify-center transition-all border ${
+      className={`w-7 h-7 sm:w-9 sm:h-9 text-sm sm:text-lg rounded sm:rounded-lg flex items-center justify-center transition-all border ${
         active
           ? `${t.active} border-white/30 scale-110 shadow-lg`
           : "bg-black/30 border-white/10 hover:bg-white/10 opacity-60 hover:opacity-100"
@@ -51,30 +49,22 @@ function ThemeButton({
 export function ThemeSelector() {
   const { theme, setTheme } = useTheme();
 
+  // Um único gatilho (brilho ✨) em qualquer tamanho de tela — clicar abre um
+  // painel com todos os temas, em vez de ocupar o topo com uma fileira de ícones.
   return (
-    <>
-      {/* Desktop: fileira de ícones, como sempre foi */}
-      <div className="hidden sm:flex absolute top-4 right-4 gap-2 z-50 bg-black/50 p-2 rounded-xl backdrop-blur-sm border border-white/10">
-        {THEMES.map((t) => (
-          <ThemeButton key={t.id} t={t} active={theme === t.id} onClick={() => setTheme(t.id)} />
-        ))}
-      </div>
-
-      {/* Mobile: menu hambúrguer com ícone de brilho, abre um painel com os temas */}
-      <div className="sm:hidden absolute top-1 right-1 z-50">
-        <Popover>
-          <PopoverTrigger className="w-8 h-8 rounded-lg bg-black/50 border border-white/10 backdrop-blur-sm flex items-center justify-center text-white">
-            <Sparkles className="w-4 h-4" />
-          </PopoverTrigger>
-          <PopoverContent className="w-auto p-2 bg-zinc-900 border-zinc-800" side="bottom" align="end">
-            <div className="grid grid-cols-4 gap-1.5">
-              {THEMES.map((t) => (
-                <ThemeButton key={t.id} t={t} active={theme === t.id} onClick={() => setTheme(t.id)} size="small" />
-              ))}
-            </div>
-          </PopoverContent>
-        </Popover>
-      </div>
-    </>
+    <div className="absolute top-1 right-1 sm:top-4 sm:right-4 z-50">
+      <Popover>
+        <PopoverTrigger className="w-8 h-8 sm:w-11 sm:h-11 rounded-lg sm:rounded-xl bg-black/50 border border-white/10 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/70 transition-all">
+          <Sparkles className="w-4 h-4 sm:w-5 sm:h-5" />
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-2 sm:p-3 bg-zinc-900 border-zinc-800" side="bottom" align="end">
+          <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5 sm:gap-2">
+            {THEMES.map((t) => (
+              <ThemeButton key={t.id} t={t} active={theme === t.id} onClick={() => setTheme(t.id)} />
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }

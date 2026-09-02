@@ -125,5 +125,21 @@
   }
   html {
     @apply font-sans;
+    /* Abaixo do breakpoint sm (640px), os componentes usam classes "mobile"
+       (sem prefixo) pensadas numa largura de referência ~375px. Em celulares
+       maiores/mais altos (ex: telas de 6.7"+ como Moto Edge 60), sem isso os
+       ícones/textos/cartas ficam do mesmo tamanho fixo mesmo sobrando muito
+       mais espaço de tela, e parecem pequenos demais. Como praticamente todo
+       tamanho do Tailwind é em rem (relativo à raiz), escalar o font-size da
+       <html> já deixa ícones, textos, paddings e cartas proporcionais à tela
+       real de cada aparelho, sem precisar reescrever cada classe.
+    */
+    font-size: clamp(16px, 12px + 1.2vw, 19px);
+  }
+
+  @media (min-width: 640px) {
+    html {
+      font-size: 16px;
+    }
   }
 }

@@ -37,6 +37,13 @@ const DISCONNECT_WAIT_MS = 5 * 60 * 1000;
 // Quanto tempo a última vaza da rodada fica parada na mesa (sem voar pro
 // vencedor) antes do placar aparecer — dá tempo de ver o que foi jogado.
 const LAST_TRICK_REVEAL_MS = 3000;
+// Quanto tempo uma vaza (não a última da rodada) fica parada antes de ir pro
+// vencedor. Quando quem fechou a vaza é o próprio vencedor, usa um tempo maior:
+// sem essa pausa extra, o mesmo jogador voltaria a poder jogar imediatamente
+// (é o próximo a começar a vaza seguinte) e podia acabar jogando de novo sem
+// querer, sem nem ver direito a própria carta que fechou a vaza anterior.
+const TRICK_REVEAL_MS = 1200;
+const TRICK_SELF_WIN_REVEAL_MS = 2000;
 
 interface GameBoardProps {
   roomId: string;
@@ -204,6 +211,7 @@ export default function GameBoard({
         prev.tableCards.length === prev.players.length - 1 &&
         next.tableCards.length === 0;
 
+      let trickHoldMs = TRICK_REVEAL_MS;
       if (trickJustEnded && prev.vira) {
         const lastCard = prev.players
           .find((p) => p.id === playerId)
@@ -216,14 +224,18 @@ export default function GameBoard({
           const winIdx = getWinningCardIndex(completedCards.map((tc) => tc.card), prev.vira);
           const winnerId = completedCards[winIdx]?.playerId;
           if (winnerId) {
+            // Quem fechou a vaza é o mesmo que ganhou: ele seria o próximo a
+            // jogar de novo, então segura mais tempo pra dar tempo de ver a
+            // carta e não deixar clicar em outra carta sem querer.
+            trickHoldMs = winnerId === playerId ? TRICK_SELF_WIN_REVEAL_MS : TRICK_REVEAL_MS;
             setTrickResult({ winnerId, cards: completedCards });
-            setTimeout(() => setTrickResult(null), 1200);
+            setTimeout(() => setTrickResult(null), trickHoldMs);
           }
         }
       }
 
       // Persist and broadcast with appropriate delay
-      const delay = next.phase === "round_end" ? 1500 : trickJustEnded ? 1200 : 0;
+      const delay = next.phase === "round_end" ? 1500 : trickJustEnded ? trickHoldMs : 0;
       supabase.from("rooms").update({ state: next }).eq("id", roomId).then();
       setTimeout(() => {
         channel.send({ type: "broadcast", event: "sync_state", payload: next });
@@ -513,7 +525,11 @@ export default function GameBoard({
   const endVoteQuorum = Math.ceil(gameState.players.filter((p) => connectedIdsForQuorum.has(p.id)).length / 2);
   const isMyTurn =
     gameState.phase === "playing" &&
-    gameState.players[gameState.currentPlayerIndex]?.name === playerName;
+    gameState.players[gameState.currentPlayerIndex]?.name === playerName &&
+    // Enquanto a animação da vaza anterior ainda está na tela (só existe no
+    // cliente do host, que é quem atualiza o estado localmente na hora, sem
+    // esperar o broadcast), não libera clicar em outra carta ainda.
+    !trickResult;
 
   // Quem está ativo agora e o que essa pessoa está fazendo — cobre as 3 fases
   // com jogador da vez (embaralhar/apostar/jogar), pra dar um destaque igual
@@ -711,61 +727,75 @@ export default function GameBoard({
           )}
         </AnimatePresence>
 
-        {/* ── OPPONENTS ── */}
-        <div className={`flex justify-center flex-wrap px-1 pt-16 sm:pt-2 ${manyOpponents ? "gap-1 sm:gap-3" : "gap-2 sm:gap-8"}`}>
-          {others.map((p) => (
-            <div key={p.id} className="flex flex-col items-center gap-1 sm:gap-2">
-              {/* Won-cards piles */}
-              {p.wonCards && p.wonCards.length > 0 && (
-                <div className="hidden sm:flex gap-1">
-                  {p.wonCards.map((trick, trickIdx) => (
-                    <motion.div key={trickIdx} initial={{ scale: 0, y: -20 }}
-                      animate={{ scale: 0.45, y: 0 }} className="relative w-24 h-36 origin-top-left">
-                      {trick.map((c, cIdx) => (
-                        <div key={cIdx} className="absolute top-0 left-0"
-                          style={{ transform: `rotate(${(cIdx - trick.length / 2) * 6}deg)`, zIndex: cIdx }}>
-                          <PlayingCard card={c} theme={theme} />
-                        </div>
-                      ))}
-                    </motion.div>
-                  ))}
-                </div>
-              )}
-
-              {activePlayerId === p.id && <ActiveArrow direction="down" />}
-
-              {/* Avatar — w-fit com min-w: cresce se o conteúdo (badge "APOSTANDO"
-                  etc.) não couber no tamanho padrão, em vez de cortar/estourar. */}
-              <div className={`bg-zinc-900 border rounded-lg sm:rounded-xl p-1.5 sm:p-3 text-center shadow-lg transition-all w-fit max-w-[40vw] sm:max-w-none ${manyOpponents ? "min-w-16 sm:min-w-24" : "min-w-20 sm:min-w-32"} ${
-                activePlayerId === p.id
-                  ? "border-yellow-400 shadow-yellow-400/30"
-                  : "border-zinc-800"
-              }`}>
-                <div className="font-bold text-white text-[11px] sm:text-sm whitespace-nowrap">{p.name}</div>
-                {activePlayerId === p.id && activeActionLabel && (
-                  <div className="flex justify-center"><ActiveBadge label={activeActionLabel} /></div>
-                )}
-                <div className="text-red-400 text-[10px] sm:text-xs font-bold">💀 {p.score} pts</div>
-                <div className="text-zinc-500 text-[10px] sm:text-xs">Aposta: {p.bet !== null ? p.bet : "?"}</div>
-                <div className="text-zinc-400 text-[10px] sm:text-xs">✅ {p.tricks}/{p.bet ?? "?"}</div>
-                {isBlindRound && p.cards.length > 0 ? (
-                  <div className="mt-1 sm:mt-2 flex justify-center scale-75 sm:scale-75 origin-top">
-                    {/* Rodada cega: você vê a carta dos outros, só não a sua */}
-                    <PlayingCard card={p.cards[0]} theme={theme} />
+        {/* ── MESA: oponentes distribuídos em cruz ao redor, como numa mesa de
+             verdade — cada um a 360°/N graus de distância do seguinte, comigo
+             sempre "embaixo" (180°). Nada de fileira, ninguém lado a lado. ── */}
+        <div className="flex-1 relative pt-14 sm:pt-4 flex items-center justify-center">
+          {others.map((p) => {
+            const totalPlayers = gameState.players.length;
+            const myIndex = gameState.players.findIndex((pl) => pl.name === playerName);
+            const theirIndex = gameState.players.findIndex((pl) => pl.id === p.id);
+            const offset = (((theirIndex - myIndex) % totalPlayers) + totalPlayers) % totalPlayers;
+            const angle = (180 + offset * (360 / totalPlayers)) % 360;
+            const rad = (angle * Math.PI) / 180;
+            // Elipse (não círculo): mais achatada em Y pra caber a altura disponível.
+            const radiusX = 40;
+            const radiusY = 32;
+            const left = 50 + radiusX * Math.sin(rad);
+            const top = 50 - radiusY * Math.cos(rad);
+            return (
+              <div key={p.id}
+                className="absolute flex flex-col items-center gap-1 sm:gap-2 -translate-x-1/2 -translate-y-1/2 z-10"
+                style={{ left: `${left}%`, top: `${top}%` }}>
+                {/* Won-cards piles */}
+                {p.wonCards && p.wonCards.length > 0 && (
+                  <div className="hidden sm:flex gap-1">
+                    {p.wonCards.map((trick, trickIdx) => (
+                      <motion.div key={trickIdx} initial={{ scale: 0, y: -20 }}
+                        animate={{ scale: 0.45, y: 0 }} className="relative w-24 h-36 origin-top-left">
+                        {trick.map((c, cIdx) => (
+                          <div key={cIdx} className="absolute top-0 left-0"
+                            style={{ transform: `rotate(${(cIdx - trick.length / 2) * 6}deg)`, zIndex: cIdx }}>
+                            <PlayingCard card={c} theme={theme} />
+                          </div>
+                        ))}
+                      </motion.div>
+                    ))}
                   </div>
-                ) : (
-                  <div className="text-zinc-500 text-[10px] sm:text-xs mt-1">🃏 {p.cards.length} cartas</div>
                 )}
-              </div>
-            </div>
-          ))}
-        </div>
 
-        {/* ── TABLE CENTER ── */}
-        <div className="flex-1 flex items-center justify-center relative">
-          {/* Vira card */}
+                {activePlayerId === p.id && <ActiveArrow direction="down" />}
+
+                {/* Avatar — w-fit com min-w: cresce se o conteúdo (badge "APOSTANDO"
+                    etc.) não couber no tamanho padrão, em vez de cortar/estourar. */}
+                <div className={`bg-zinc-900 border rounded-lg sm:rounded-xl p-1.5 sm:p-3 text-center shadow-lg transition-all w-fit max-w-[34vw] sm:max-w-none ${manyOpponents ? "min-w-14 sm:min-w-24" : "min-w-16 sm:min-w-32"} ${
+                  activePlayerId === p.id
+                    ? "border-yellow-400 shadow-yellow-400/30"
+                    : "border-zinc-800"
+                }`}>
+                  <div className="font-bold text-white text-[11px] sm:text-sm whitespace-nowrap">{p.name}</div>
+                  {activePlayerId === p.id && activeActionLabel && (
+                    <div className="flex justify-center"><ActiveBadge label={activeActionLabel} /></div>
+                  )}
+                  <div className="text-red-400 text-[10px] sm:text-xs font-bold">💀 {p.score} pts</div>
+                  <div className="text-zinc-500 text-[10px] sm:text-xs">Aposta: {p.bet !== null ? p.bet : "?"}</div>
+                  <div className="text-zinc-400 text-[10px] sm:text-xs">✅ {p.tricks}/{p.bet ?? "?"}</div>
+                  {isBlindRound && p.cards.length > 0 ? (
+                    <div className="mt-1 sm:mt-2 flex justify-center scale-75 sm:scale-75 origin-top">
+                      {/* Rodada cega: você vê a carta dos outros, só não a sua */}
+                      <PlayingCard card={p.cards[0]} theme={theme} />
+                    </div>
+                  ) : (
+                    <div className="text-zinc-500 text-[10px] sm:text-xs mt-1">🃏 {p.cards.length} cartas</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Vira card — canto, pra não brigar de espaço com quem senta à esquerda */}
           {gameState.vira && (
-            <div className="absolute left-1 sm:left-4 top-1/2 -translate-y-1/2 flex flex-col items-center">
+            <div className="absolute left-1 sm:left-4 top-14 sm:top-4 flex flex-col items-center z-10">
               <span className="text-zinc-400 font-bold mb-1 uppercase tracking-widest text-[10px] sm:text-xs">Vira</span>
               <PlayingCard card={gameState.vira} theme={theme} />
             </div>
