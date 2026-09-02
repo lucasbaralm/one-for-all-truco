@@ -86,6 +86,18 @@ export default function GameBoard({
   const [shuffleAnnouncement, setShuffleAnnouncement] = useState<{ dealerName: string; label: string } | null>(null);
   const { theme } = useTheme();
 
+  // Largura real da viewport, só pra decidir o raio da elipse dos oponentes
+  // (ver abaixo) — em telas estreitas um raio X grande empurra os assentos da
+  // esquerda/direita pra fora da tela, já que a caixa do avatar tem uma
+  // largura mínima que não encolhe com a tela.
+  const [viewportWidth, setViewportWidth] = useState(0);
+  useEffect(() => {
+    const update = () => setViewportWidth(window.innerWidth);
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
   // Sempre a versão mais atual de initialPlayers, pra usar dentro de callbacks
   // de broadcast (cujo closure foi criado há um tempo) sem precisar re-registrar
   // os listeners do channel toda vez que a presença muda.
@@ -158,7 +170,37 @@ export default function GameBoard({
   const applyState = useCallback((incoming: GameState) => {
     setGameState((prev) => {
       // Only apply if incoming is actually different (avoid unnecessary re-renders)
-      if (JSON.stringify(prev) === JSON.stringify(incoming)) return prev;
+      if (prev && JSON.stringify(prev) === JSON.stringify(incoming)) return prev;
+
+      // Vaza recém-concluída no meio da rodada: quem manda esse sync_state (o
+      // host, via processCardPlay) já limpou tableCards ANTES de broadcastar,
+      // então quem só recebe o broadcast (guests) nunca via a animação "cartas
+      // indo pro vencedor" — ela só era criada localmente no cliente do host.
+      // Reconstrói a mesma vaza aqui (comparando com o que esse cliente tinha
+      // antes) pra que todo mundo, não só o host, veja a vaza e tenha a mesma
+      // pausa antes de poder jogar de novo.
+      if (
+        prev &&
+        prev.phase === "playing" &&
+        incoming.tableCards.length === 0 &&
+        prev.tableCards.length > 0 &&
+        prev.tableCards.length === prev.players.length - 1
+      ) {
+        const winner = incoming.players.find((p) => {
+          const before = prev.players.find((pp) => pp.id === p.id);
+          return !!before && p.wonCards.length > before.wonCards.length;
+        });
+        const lastPlayer = prev.players[prev.currentPlayerIndex];
+        const trick = winner?.wonCards[winner.wonCards.length - 1];
+        const lastCard = trick?.[trick.length - 1];
+        if (winner && lastPlayer && lastCard) {
+          const completedCards = [...prev.tableCards, { playerId: lastPlayer.id, card: lastCard }];
+          const holdMs = winner.id === lastPlayer.id ? TRICK_SELF_WIN_REVEAL_MS : TRICK_REVEAL_MS;
+          setTrickResult({ winnerId: winner.id, cards: completedCards });
+          setTimeout(() => setTrickResult(null), holdMs);
+        }
+      }
+
       return incoming;
     });
   }, []);
@@ -541,7 +583,7 @@ export default function GameBoard({
   const activeActionLabel =
     gameState.phase === "shuffling" ? "🔀 Embaralhando"
     : gameState.phase === "betting" ? "💭 Apostando"
-    : gameState.phase === "playing" ? "🎯 Escolhendo carta"
+    : gameState.phase === "playing" ? "🎯 Escolhendo"
     : null;
   const isMeActive = !!me && activePlayerId === me.id;
 
@@ -604,10 +646,13 @@ export default function GameBoard({
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <LayoutGroup>
-      {/* min-h (não h fixo) + overflow-x só: com 4+ jogadores os oponentes podem
-          quebrar em mais de uma linha — deixa a página crescer/rolar em vez de
-          cortar conteúdo, mas nunca estoura a largura pros lados. */}
-      <div className="flex flex-col flex-1 justify-between relative overflow-x-hidden">
+      {/* min-h-0: sem isso um flex-1 nunca encolhe abaixo do tamanho do seu
+          conteúdo, e o board vazava pra fora da tela em vez de caber nela.
+          overflow-hidden nos dois eixos: a página inteira (page.tsx) já é
+          h-dvh + overflow-hidden — isso aqui é a segunda camada, garantindo
+          que nada aqui dentro force scroll mesmo se algo ficar um pouco alto
+          demais (nesse caso só recorta, não estoura a tela). */}
+      <div className="flex flex-col flex-1 min-h-0 justify-between relative overflow-hidden">
 
         {/* ── FLOATING EMOJIS: fly from whoever sent it, in to the table center ── */}
         {/* z-[60]: acima do popup do emoji picker (z-50), senão fica escondido atrás dele */}
@@ -636,9 +681,12 @@ export default function GameBoard({
         </div>
 
         {/* ── TOOLBAR: voltar ao menu + votar para encerrar ── */}
-        {/* No mobile fica numa 2ª linha, embaixo do seletor de tema (que ocupa o
-            canto direito inteiro) — em telas largas os dois cabem lado a lado. */}
-        <div className="absolute top-9 left-1 sm:top-2 sm:left-2 z-30 flex items-center gap-1 sm:gap-2 max-w-[70vw] sm:max-w-none">
+        {/* fixed (não absolute): o seletor de tema (ThemeSelector, montado no
+            layout raiz) é posicionado direto contra a viewport, sem herdar
+            padding de nenhum ancestral. Pra ficar na mesma linha que ele (em
+            vez de mais pra baixo, empurrado pelo padding da página/board),
+            isso aqui também precisa ser fixed contra a viewport. */}
+        <div className="fixed top-1 left-1 sm:top-2 sm:left-2 z-30 flex items-center gap-1 sm:gap-2 max-w-[70vw] sm:max-w-none">
           <button
             onClick={() => setShowLeaveConfirm(true)}
             className="flex items-center gap-1 sm:gap-1.5 bg-black/50 hover:bg-black/70 border border-white/10 text-zinc-300 hover:text-white text-[10px] sm:text-xs font-bold px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg sm:rounded-xl backdrop-blur-sm transition-all shrink-0">
@@ -679,7 +727,7 @@ export default function GameBoard({
         <AnimatePresence>
           {shuffleAnnouncement && (
             <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-              className="absolute top-2 left-1/2 -translate-x-1/2 z-30 bg-black/60 border border-yellow-500/40 text-yellow-200 text-xs font-bold px-3 py-1.5 rounded-full backdrop-blur-sm whitespace-nowrap">
+              className="absolute top-10 sm:top-2 left-1/2 -translate-x-1/2 z-30 bg-black/60 border border-yellow-500/40 text-yellow-200 text-xs font-bold px-3 py-1.5 rounded-full backdrop-blur-sm whitespace-nowrap">
               {shuffleAnnouncement.dealerName} embaralhou com {shuffleAnnouncement.label}
             </motion.div>
           )}
@@ -730,7 +778,7 @@ export default function GameBoard({
         {/* ── MESA: oponentes distribuídos em cruz ao redor, como numa mesa de
              verdade — cada um a 360°/N graus de distância do seguinte, comigo
              sempre "embaixo" (180°). Nada de fileira, ninguém lado a lado. ── */}
-        <div className="flex-1 relative pt-14 sm:pt-4 flex items-center justify-center">
+        <div className="flex-1 min-h-0 relative pt-10 sm:pt-4 flex items-center justify-center">
           {others.map((p) => {
             const totalPlayers = gameState.players.length;
             const myIndex = gameState.players.findIndex((pl) => pl.name === playerName);
@@ -739,7 +787,11 @@ export default function GameBoard({
             const angle = (180 + offset * (360 / totalPlayers)) % 360;
             const rad = (angle * Math.PI) / 180;
             // Elipse (não círculo): mais achatada em Y pra caber a altura disponível.
-            const radiusX = 40;
+            // Raio X menor no mobile: a caixa do avatar tem largura mínima fixa
+            // (não encolhe com a tela), então nos assentos da esquerda/direita
+            // um raio de 40 empurrava a caixa pra fora da viewport.
+            const isNarrowScreen = viewportWidth > 0 && viewportWidth < 640;
+            const radiusX = isNarrowScreen ? 32 : 40;
             const radiusY = 32;
             const left = 50 + radiusX * Math.sin(rad);
             const top = 50 - radiusY * Math.cos(rad);
@@ -793,9 +845,10 @@ export default function GameBoard({
             );
           })}
 
-          {/* Vira card — canto, pra não brigar de espaço com quem senta à esquerda */}
+          {/* Vira card — canto, pra não brigar de espaço com quem senta à esquerda.
+              top precisa ficar abaixo da toolbar (agora fixed no topo). */}
           {gameState.vira && (
-            <div className="absolute left-1 sm:left-4 top-14 sm:top-4 flex flex-col items-center z-10">
+            <div className="absolute left-1 sm:left-4 top-10 sm:top-4 flex flex-col items-center z-10">
               <span className="text-zinc-400 font-bold mb-1 uppercase tracking-widest text-[10px] sm:text-xs">Vira</span>
               <PlayingCard card={gameState.vira} theme={theme} />
             </div>
@@ -1032,6 +1085,19 @@ function ShufflePanel({
   onShuffle: (t: ShuffleType) => void;
 }) {
   const [preview, setPreview] = useState<ShuffleType | null>(null);
+  const [confirmed, setConfirmed] = useState<ShuffleType | null>(null);
+
+  // No mobile não existe "hover" de verdade, então o preview (que só rodava
+  // com onHoverStart) nunca aparecia lá — e mesmo no desktop, ao clicar a
+  // fase mudava tão rápido que ninguém chegava a ver a animação escolhida.
+  // Ao tocar/clicar: mostra a animação escolhida por um instante e só DEPOIS
+  // manda embaralhar de verdade, pra dar tempo de ver o que foi selecionado.
+  const handlePick = (type: ShuffleType) => {
+    if (confirmed) return;
+    setConfirmed(type);
+    setPreview(type);
+    setTimeout(() => onShuffle(type), 1100);
+  };
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
@@ -1048,10 +1114,14 @@ function ShufflePanel({
               { type: "lucas" as ShuffleType, label: "👑 Supremo do Lucas", desc: "Não embaralha nada" },
             ].map(({ type, label, desc }) => (
               <motion.button key={type} whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}
-                onHoverStart={() => setPreview(type)} onHoverEnd={() => setPreview(null)}
-                onClick={() => onShuffle(type)}
-                className={`flex flex-col items-center gap-0.5 sm:gap-1 bg-zinc-900 border px-2.5 py-2 sm:px-5 sm:py-3 rounded-lg sm:rounded-xl transition-all text-white w-[76px] sm:w-auto ${
-                  type === "lucas"
+                onHoverStart={() => !confirmed && setPreview(type)}
+                onHoverEnd={() => !confirmed && setPreview(null)}
+                onClick={() => handlePick(type)}
+                disabled={!!confirmed}
+                className={`flex flex-col items-center gap-0.5 sm:gap-1 bg-zinc-900 border px-2.5 py-2 sm:px-5 sm:py-3 rounded-lg sm:rounded-xl transition-all text-white w-[76px] sm:w-auto disabled:opacity-40 ${
+                  confirmed === type
+                    ? "border-yellow-400 shadow-[0_0_16px_rgba(250,204,21,0.4)]"
+                    : type === "lucas"
                     ? "border-yellow-600 hover:border-yellow-400 hover:bg-yellow-900/20"
                     : "border-zinc-700 hover:border-red-500 hover:bg-red-900/20"
                 }`}>
@@ -1061,7 +1131,7 @@ function ShufflePanel({
               </motion.button>
             ))}
           </div>
-          <div className="hidden sm:block">
+          <div>
             <AnimatePresence mode="wait">
               {preview && <DeckAnimation type={preview} key={preview} />}
             </AnimatePresence>
@@ -1210,7 +1280,7 @@ function PlayingCard({
     const back = backs[backIndex % backs.length];
     return (
       <div
-        className="w-12 h-16 sm:w-20 sm:h-28 rounded-lg sm:rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.6)] border-2 border-white/20 bg-cover bg-center overflow-hidden select-none"
+        className="w-[3.6rem] h-[4.8rem] sm:w-24 sm:h-[8.4rem] rounded-lg sm:rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.6)] border-2 border-white/20 bg-cover bg-center overflow-hidden select-none"
         style={{ backgroundImage: `url(${back})` }}
       />
     );
@@ -1222,12 +1292,12 @@ function PlayingCard({
 
   return (
     <div
-      className={`w-12 h-16 sm:w-20 sm:h-28 bg-white/96 backdrop-blur-sm rounded-lg sm:rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.5)] flex flex-col justify-between p-1 sm:p-1.5 border-2 ${isRed ? redBorder : blackBorder} ${isRed ? "text-red-600" : "text-zinc-900"} select-none`}>
-      <div className="text-[10px] sm:text-base font-bold leading-none">{card.value}</div>
+      className={`w-[3.6rem] h-[4.8rem] sm:w-24 sm:h-[8.4rem] bg-white/96 backdrop-blur-sm rounded-lg sm:rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.5)] flex flex-col justify-between p-1 sm:p-2 border-2 ${isRed ? redBorder : blackBorder} ${isRed ? "text-red-600" : "text-zinc-900"} select-none`}>
+      <div className="text-xs sm:text-lg font-bold leading-none">{card.value}</div>
       <div className="flex-1 flex items-center justify-center">
-        <Icon className="w-4 h-4 sm:w-8 sm:h-8 fill-current" />
+        <Icon className="w-5 h-5 sm:w-10 sm:h-10 fill-current" />
       </div>
-      <div className="text-[10px] sm:text-base font-bold leading-none rotate-180">{card.value}</div>
+      <div className="text-xs sm:text-lg font-bold leading-none rotate-180">{card.value}</div>
     </div>
   );
 }

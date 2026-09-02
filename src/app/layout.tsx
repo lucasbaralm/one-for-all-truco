@@ -28,9 +28,7 @@ export default function RootLayout({
     >
       <body className="min-h-full">
         <ThemeProvider>
-          <div className="absolute top-4 right-4 z-50">
-            <ThemeSelector />
-          </div>
+          <ThemeSelector />
           {children}
         </ThemeProvider>
       </body>
