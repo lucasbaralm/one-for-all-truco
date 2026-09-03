@@ -245,17 +245,17 @@ export default function Lobby() {
               <div className="space-y-2">
                 <Label htmlFor="code" className="text-zinc-300">Código da Sala</Label>
                 <div className="flex gap-2">
-                  <Input 
-                    id="code" 
-                    placeholder="Ex: XF8K" 
+                  <Input
+                    id="code"
+                    placeholder="Ex: XF8K"
                     value={roomCode}
                     onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
                     maxLength={4}
                     className="bg-zinc-950/50 border-zinc-800 text-white placeholder:text-zinc-600 h-12 text-lg uppercase tracking-widest font-mono"
                     autoComplete="off"
                   />
-                  <Button 
-                    type="submit" 
+                  <Button
+                    type="submit"
                     className="h-12 w-12 bg-white text-black hover:bg-zinc-200"
                     disabled={roomCode.length < 3}
                   >
@@ -273,7 +273,7 @@ export default function Lobby() {
               <Bot className="w-5 h-5 text-emerald-500" /> Modo Teste
             </CardTitle>
             <CardDescription className="text-zinc-400">
-              Você contra 3 IAs — elas embaralham, apostam e jogam totalmente ao acaso.
+              Você contra 3 Bots eles embaralham, apostam e jogam totalmente ao acaso.
             </CardDescription>
           </CardHeader>
           <CardContent>
