@@ -5,7 +5,7 @@ import { Card } from './rules';
 import { GameState, ShuffleStyle } from './state-machine';
 
 export type ClientMessage =
-  | { type: 'start_game'; players: { id: string; name: string }[] }
+  | { type: 'start_game'; players: { id: string; name: string; avatarUrl?: string | null }[] }
   | { type: 'bet'; playerId: string; bet: number }
   | { type: 'play_card'; playerId: string; cardIndex: number }
   | { type: 'shuffle'; playerId: string; style: ShuffleStyle }

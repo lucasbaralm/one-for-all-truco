@@ -10,6 +10,8 @@ export interface PlayerState {
   tricks: number;
   cards: Card[];
   wonCards: Card[][]; // Bolos de vazas ganhas no round atual
+  // undefined/null = sem foto enviada ainda, a UI cai pro ícone/inicial padrão.
+  avatarUrl?: string | null;
 }
 
 export interface GameState {
@@ -32,7 +34,7 @@ export interface GameState {
 /**
  * Cria o estado inicial do jogo com os jogadores que estavam no lobby.
  */
-export function createInitialState(playerPresence: { id: string, name: string }[]): GameState {
+export function createInitialState(playerPresence: { id: string, name: string, avatarUrl?: string | null }[]): GameState {
   return {
     phase: 'waiting',
     players: playerPresence.map(p => ({
@@ -43,6 +45,7 @@ export function createInitialState(playerPresence: { id: string, name: string }[
       tricks: 0,
       cards: [],
       wonCards: [],
+      avatarUrl: p.avatarUrl,
     })),
     currentRoundCards: 1, // Começa com 1 carta
     roundDirection: 'up',

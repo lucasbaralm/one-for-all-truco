@@ -1,18 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Users, Plus, ArrowRight, Trophy, History, Bot } from "lucide-react";
+import { Users, Plus, ArrowRight, Trophy, History, Bot, Camera, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { PlayerAvatar } from "@/components/game/PlayerAvatar";
+
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 
 export default function Lobby() {
   const router = useRouter();
   const [playerName, setPlayerName] = useState("");
+  const [userId, setUserId] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [avatarError, setAvatarError] = useState("");
+  const avatarInputRef = useRef<HTMLInputElement>(null);
   const [roomCode, setRoomCode] = useState("");
   const [history, setHistory] = useState<any[]>([]);
   const [creatingRoom, setCreatingRoom] = useState(false);
@@ -27,6 +35,8 @@ export default function Lobby() {
       }
       // Pega o nome verdadeiro salvo no metadata
       setPlayerName(data.session.user.user_metadata.username || "Jogador");
+      setUserId(data.session.user.id);
+      setAvatarUrl(data.session.user.user_metadata.avatar_url ?? null);
     };
 
     const fetchHistory = async () => {
@@ -43,6 +53,58 @@ export default function Lobby() {
     fetchUser();
     fetchHistory();
   }, [router]);
+
+  // Upload da foto de perfil: guarda no bucket "avatars" do Supabase Storage
+  // (precisa existir e ter as policies certas — ver instruções no README/chat)
+  // sob o path do próprio usuário, e salva a URL pública no user_metadata pra
+  // ficar "salvo na conta pra sempre" e visível pros outros via presença.
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // permite escolher o mesmo arquivo de novo depois
+    if (!file || !userId) return;
+
+    setAvatarError("");
+
+    if (!file.type.startsWith("image/")) {
+      setAvatarError("Escolha um arquivo de imagem.");
+      return;
+    }
+    if (file.size > MAX_AVATAR_BYTES) {
+      setAvatarError("Imagem muito grande (máximo 5MB).");
+      return;
+    }
+
+    setUploadingAvatar(true);
+    try {
+      const ext = file.name.includes(".") ? file.name.split(".").pop() : "jpg";
+      const path = `${userId}/avatar.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("avatars")
+        .upload(path, file, { upsert: true });
+      if (uploadError) {
+        setAvatarError("Não foi possível enviar a foto. Tente novamente.");
+        return;
+      }
+
+      const { data: publicUrlData } = supabase.storage.from("avatars").getPublicUrl(path);
+      // Cache-bust: o path não muda num re-upload (upsert), então sem isso o
+      // navegador (e outros jogadores) continuariam vendo a imagem antiga em cache.
+      const publicUrl = `${publicUrlData.publicUrl}?v=${Date.now()}`;
+
+      const { error: updateError } = await supabase.auth.updateUser({ data: { avatar_url: publicUrl } });
+      if (updateError) {
+        setAvatarError("Foto enviada, mas não deu pra salvar no perfil. Tente de novo.");
+        return;
+      }
+
+      setAvatarUrl(publicUrl);
+    } catch {
+      setAvatarError("Ocorreu um erro ao enviar a foto.");
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
 
   const generateRoomCode = () => {
     // Gera um código aleatório de 4 letras para a sala
@@ -103,8 +165,36 @@ export default function Lobby() {
         transition={{ duration: 0.5 }}
         className="w-full max-w-md space-y-6"
       >
-        <div className="text-center space-y-2">
+        <div className="text-center space-y-3">
           <h1 className="text-3xl font-black text-white">LOBBY</h1>
+
+          <div className="flex flex-col items-center gap-2">
+            <button
+              type="button"
+              onClick={() => avatarInputRef.current?.click()}
+              disabled={uploadingAvatar}
+              className="relative group rounded-full disabled:cursor-wait"
+              title="Trocar foto de perfil"
+            >
+              <PlayerAvatar avatarUrl={avatarUrl} name={playerName} className="w-20 h-20 text-2xl" />
+              <div className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                {uploadingAvatar ? (
+                  <Loader2 className="w-6 h-6 text-white animate-spin" />
+                ) : (
+                  <Camera className="w-6 h-6 text-white" />
+                )}
+              </div>
+            </button>
+            <input
+              ref={avatarInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleAvatarChange}
+              className="hidden"
+            />
+            {avatarError && <p className="text-red-500 text-xs font-bold max-w-xs">{avatarError}</p>}
+          </div>
+
           <p className="text-zinc-400">
             Bem-vindo(a), <span className="text-red-500 font-bold">{playerName}</span>!
           </p>

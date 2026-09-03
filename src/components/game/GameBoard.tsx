@@ -11,6 +11,7 @@ import {
   ShuffleStyle,
 } from "@/lib/game/state-machine";
 import { PlayerPresence } from "./RoomManager";
+import { PlayerAvatar } from "./PlayerAvatar";
 import { Card as GameCard, getWinningCardIndex } from "@/lib/game/rules";
 import { ClientMessage, ServerMessage } from "@/lib/game/party-protocol";
 import { usePartySocket } from "partysocket/react";
@@ -223,7 +224,7 @@ export default function GameBoard({
       socket.send(
         JSON.stringify({
           type: "start_game",
-          players: initialPlayersRef.current.map((p) => ({ id: p.id, name: p.name })),
+          players: initialPlayersRef.current.map((p) => ({ id: p.id, name: p.name, avatarUrl: p.avatarUrl })),
         } satisfies ClientMessage)
       );
     },
@@ -389,7 +390,7 @@ export default function GameBoard({
           onClick={() => {
             send({
               type: "start_game",
-              players: initialPlayers.map((p) => ({ id: p.id, name: p.name })),
+              players: initialPlayers.map((p) => ({ id: p.id, name: p.name, avatarUrl: p.avatarUrl })),
             });
           }}
           className="w-full max-w-md h-14 text-lg font-bold bg-white text-black hover:bg-zinc-200">
@@ -455,8 +456,17 @@ export default function GameBoard({
   const seatRadiusX = isNarrowScreen ? 32 : 40;
   // Menor no mobile: sobra menos altura livre acima de um assento no topo pra
   // caber a pilha de vazas ganhas (ver bottom-full logo abaixo) sem colidir
-  // com a toolbar fixa.
-  const seatRadiusY = isNarrowScreen ? 26 : 32;
+  // com a toolbar fixa. Maior no desktop (38 em vez de 32): com exatamente 4
+  // jogadores um assento cai bem no topo-centro (ângulo 0°) — precisa de mais
+  // raio pra não cair em cima do próprio círculo da mesa (que ali é grande).
+  const seatRadiusY = isNarrowScreen ? 26 : 38;
+  // Cartas jogadas na mesa: o círculo tem tamanho fixo em rem, mas a carta é
+  // do tamanho da mão inteira — sem reduzir, qualquer carta perto da borda
+  // colide com o assento mais próximo (visto com 4 jogadores, onde um
+  // assento cai bem no topo-centro). Deslocar em px (tentado antes) só
+  // funciona no viewport testado; reduzir a própria carta escala com
+  // qualquer tamanho de tela, igual já é feito com a Vira.
+  const TABLE_CARD_SCALE = 0.6;
   const getSeatPosition = (playerId: string) => {
     const totalPlayers = gameState.players.length;
     const myIndex = gameState.players.findIndex((pl) => pl.name === playerName);
@@ -723,7 +733,11 @@ export default function GameBoard({
                       ? "border-yellow-400 shadow-yellow-400/30"
                       : "border-zinc-800"
                   }`}>
-                    <div className="font-bold text-white text-[11px] sm:text-sm whitespace-nowrap">{p.name}</div>
+                    <div className="flex items-center justify-center gap-1 sm:gap-1.5">
+                      <PlayerAvatar avatarUrl={p.avatarUrl} name={p.name}
+                        className={manyOpponents ? "w-4 h-4 sm:w-6 sm:h-6 text-[9px] sm:text-xs" : "w-5 h-5 sm:w-7 sm:h-7 text-[10px] sm:text-sm"} />
+                      <div className="font-bold text-white text-[11px] sm:text-sm whitespace-nowrap">{p.name}</div>
+                    </div>
                     {activePlayerId === p.id && activeActionLabel && (
                       <div className="flex justify-center"><ActiveBadge label={activeActionLabel} /></div>
                     )}
@@ -731,19 +745,32 @@ export default function GameBoard({
                     <div className="text-zinc-500 text-[10px] sm:text-xs">Aposta: {p.bet !== null ? p.bet : "?"}</div>
                     <div className="text-zinc-400 text-[10px] sm:text-xs">✅ {p.tricks}/{p.bet ?? "?"}</div>
                     {isBlindRound && p.cards.length > 0 ? (
-                      <div className="mt-1 sm:mt-2 flex justify-center scale-75 sm:scale-75 origin-top">
-                        {/* Rodada cega: você vê a carta dos outros, só não a sua */}
-                        <PlayingCard card={p.cards[0]} theme={theme} />
+                      <div className="mt-1 sm:mt-2 h-[4.32rem] sm:h-[7.56rem] overflow-hidden flex justify-center">
+                        {/* Rodada cega: você vê a carta dos outros, só não a sua.
+                            Mesmo motivo do leque de versos acima: scale sozinho não
+                            reduz a altura reservada no layout, só a pintura. */}
+                        <div className="scale-75 sm:scale-75 origin-top">
+                          <PlayingCard card={p.cards[0]} theme={theme} />
+                        </div>
                       </div>
                     ) : p.cards.length > 0 ? (
                       <div className="mt-1 flex flex-col items-center gap-0.5">
                         {/* Versos das cartas no tema escolhido — só pra imersão, não dá
                             pra ver o valor. Limita o leque a 6 versos mesmo com mais
-                            cartas na mão, senão a caixa do avatar fica gigante. */}
-                        <div className="flex -space-x-3 sm:-space-x-5 scale-[0.42] sm:scale-[0.55] origin-top">
-                          {Array.from({ length: Math.min(p.cards.length, 6) }).map((_, i) => (
-                            <PlayingCard key={i} card={p.cards[0]} hidden theme={theme} backIndex={i} />
-                          ))}
+                            cartas na mão, senão a caixa do avatar fica gigante.
+                            `scale-[]` só encolhe visualmente: o layout (altura que a
+                            caixa do avatar reserva) continua sendo a do card em
+                            tamanho real (~5.76rem/10.08rem), mesmo pintando pequeno.
+                            O wrapper abaixo fixa a altura já reduzida (com
+                            overflow-hidden) pra caixa do avatar não ficar
+                            secretamente enorme e colidir com o que estiver acima
+                            dela (mesa, cartas jogadas, etc). */}
+                        <div className="h-[2.42rem] sm:h-[5.55rem] overflow-hidden">
+                          <div className="flex -space-x-3 sm:-space-x-5 scale-[0.42] sm:scale-[0.55] origin-top">
+                            {Array.from({ length: Math.min(p.cards.length, 6) }).map((_, i) => (
+                              <PlayingCard key={i} card={p.cards[0]} hidden theme={theme} backIndex={i} />
+                            ))}
+                          </div>
                         </div>
                         <div className="text-zinc-500 text-[10px] sm:text-xs">🃏 {p.cards.length} cartas</div>
                       </div>
@@ -821,11 +848,16 @@ export default function GameBoard({
                   initial={{ opacity: 0, scale: 0.3 }}
                   animate={{
                     opacity: 1,
-                    scale: isWinning ? 1.12 : 1,
-                    y: isWinning ? -14 : 0,
-                    x: (idx - (gameState.tableCards.length - 1) / 2) * (typeof window !== "undefined" && window.innerWidth < 640 ? 20 : 30),
+                    scale: (isWinning ? 1.15 : 1) * TABLE_CARD_SCALE,
+                    x: (idx - (gameState.tableCards.length - 1) / 2) * (typeof window !== "undefined" && window.innerWidth < 640 ? 14 : 20),
                     rotate: (idx - 1) * 7,
-                    zIndex: isWinning ? 50 : idx,
+                    // Sempre abaixo do z-10 dos assentos (ver `className="absolute
+                    // z-10"` nos oponentes): mesmo reduzindo a carta e afastando o
+                    // assento, alguma sobreposição espacial pode sobrar em algum
+                    // viewport. Com isso, se sobrar, é a caixa do jogador (nome/
+                    // pontuação) que fica por cima da carta — nunca o contrário,
+                    // que era o bug visual reportado (carta "engolindo" a caixa).
+                    zIndex: isWinning ? 5 : idx,
                   }}
                   transition={{ type: "spring", stiffness: 250, damping: 22 }}
                   className="absolute">
@@ -895,16 +927,24 @@ export default function GameBoard({
               <div className="flex gap-0.5 sm:gap-1 items-end min-w-[36px] sm:min-w-[60px]">
                 <AnimatePresence>
                   {me.wonCards && me.wonCards.map((trick, trickIdx) => (
-                    <motion.div key={trickIdx} initial={{ scale: 0, y: 20 }}
-                      animate={{ scale: isNarrowScreen ? 0.35 : 0.5, y: 0 }}
-                      exit={{ scale: 0 }} className="relative w-8 h-11 sm:w-24 sm:h-36 origin-bottom-left">
-                      {trick.map((c, cIdx) => (
-                        <div key={cIdx} className="absolute bottom-0 left-0"
-                          style={{ transform: `rotate(${(cIdx - trick.length / 2) * 6}deg)`, zIndex: cIdx }}>
-                          <PlayingCard card={c} theme={theme} />
-                        </div>
-                      ))}
-                    </motion.div>
+                    // O `scale` no motion.div só encolhe a pintura — o layout
+                    // ainda reserva w-24/h-36 (tamanho real da carta) mesmo
+                    // depois de "encolhido", inflando a linha "Vazas ganhas"
+                    // por baixo dos panos. O wrapper fixa o tamanho já
+                    // reduzido (com overflow-hidden) pra essa área não crescer
+                    // escondida e sobrar/faltar espaço no resto da tela.
+                    <div key={trickIdx} className="w-[0.7rem] h-[0.96rem] sm:w-12 sm:h-[4.5rem] overflow-hidden">
+                      <motion.div initial={{ scale: 0, y: 20 }}
+                        animate={{ scale: isNarrowScreen ? 0.35 : 0.5, y: 0 }}
+                        exit={{ scale: 0 }} className="relative w-8 h-11 sm:w-24 sm:h-36 origin-bottom-left">
+                        {trick.map((c, cIdx) => (
+                          <div key={cIdx} className="absolute bottom-0 left-0"
+                            style={{ transform: `rotate(${(cIdx - trick.length / 2) * 6}deg)`, zIndex: cIdx }}>
+                            <PlayingCard card={c} theme={theme} />
+                          </div>
+                        ))}
+                      </motion.div>
+                    </div>
                   ))}
                 </AnimatePresence>
               </div>
@@ -933,8 +973,11 @@ export default function GameBoard({
                     </Popover>
                   </div>
 
-                  <div className="text-[11px] sm:text-base font-bold text-white whitespace-nowrap">
-                    {me.name}
+                  <div className="flex items-center justify-center gap-1 sm:gap-1.5">
+                    <PlayerAvatar avatarUrl={me.avatarUrl} name={me.name} className="w-5 h-5 sm:w-8 sm:h-8 text-[10px] sm:text-sm" />
+                    <div className="text-[11px] sm:text-base font-bold text-white whitespace-nowrap">
+                      {me.name}
+                    </div>
                   </div>
                   {isMeActive && activeActionLabel && (
                     <div className="flex justify-center"><ActiveBadge label={activeActionLabel} /></div>

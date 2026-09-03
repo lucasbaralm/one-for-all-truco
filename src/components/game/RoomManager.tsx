@@ -8,11 +8,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, Crown, Loader2, Play, GripVertical } from "lucide-react";
 import { Reorder } from "framer-motion";
 import GameBoard from "./GameBoard";
+import { PlayerAvatar } from "./PlayerAvatar";
 
 export type PlayerPresence = {
   id: string;
   name: string;
   joinedAt: string;
+  avatarUrl?: string | null;
 };
 
 // Nomes só pra exibição dos 3 bots do Modo Teste — o id de verdade (que o
@@ -51,6 +53,10 @@ export default function RoomManager({ roomId, testMode = false }: { roomId: stri
         return;
       }
       const name = data.session.user.user_metadata.username || "Jogador";
+      // avatar_url só existe no próprio user_metadata (o de cada um) — é por
+      // isso que ele precisa viajar via presença/initialPlayers até os outros
+      // jogadores, e não pode ser buscado direto do Supabase pra outro usuário.
+      const avatarUrl: string | null = data.session.user.user_metadata.avatar_url ?? null;
       setPlayerName(name);
 
       // Modo Teste: eu vs 3 bots, sem presença nem outros jogadores de
@@ -59,8 +65,8 @@ export default function RoomManager({ roomId, testMode = false }: { roomId: stri
       if (testMode) {
         const now = new Date().toISOString();
         setPlayers([
-          { id: name, name, joinedAt: now },
-          ...BOT_NAMES.map((botName, i) => ({ id: `bot:${i + 1}`, name: botName, joinedAt: now })),
+          { id: name, name, joinedAt: now, avatarUrl },
+          ...BOT_NAMES.map((botName, i) => ({ id: `bot:${i + 1}`, name: botName, joinedAt: now, avatarUrl: null })),
         ]);
         setStatus("playing");
         return;
@@ -83,11 +89,12 @@ export default function RoomManager({ roomId, testMode = false }: { roomId: stri
 
           for (const [key, presencesValue] of Object.entries(state)) {
             const presences = presencesValue as any[];
-            const p = presences[0] as { name: string; joinedAt: string };
+            const p = presences[0] as { name: string; joinedAt: string; avatarUrl?: string | null };
             connectedPlayers.push({
               id: key,
               name: p.name,
               joinedAt: p.joinedAt,
+              avatarUrl: p.avatarUrl ?? null,
             });
           }
 
@@ -101,7 +108,7 @@ export default function RoomManager({ roomId, testMode = false }: { roomId: stri
           setPlayers((prev) => {
             const changed =
               prev.length !== connectedPlayers.length ||
-              connectedPlayers.some((cp, i) => prev[i]?.id !== cp.id || prev[i]?.joinedAt !== cp.joinedAt);
+              connectedPlayers.some((cp, i) => prev[i]?.id !== cp.id || prev[i]?.joinedAt !== cp.joinedAt || prev[i]?.avatarUrl !== cp.avatarUrl);
             return changed ? connectedPlayers : prev;
           });
 
@@ -149,6 +156,7 @@ export default function RoomManager({ roomId, testMode = false }: { roomId: stri
             await channel.track({
               name: name,
               joinedAt,
+              avatarUrl,
             });
             if (cancelled) return;
 
@@ -266,9 +274,7 @@ export default function RoomManager({ roomId, testMode = false }: { roomId: stri
               >
                 <div className="flex items-center gap-3">
                   <GripVertical className="w-4 h-4 text-zinc-600 shrink-0" />
-                  <div className="bg-zinc-800 w-10 h-10 rounded-full flex items-center justify-center font-bold text-white">
-                    {p.name.charAt(0).toUpperCase()}
-                  </div>
+                  <PlayerAvatar avatarUrl={p.avatarUrl} name={p.name} />
                   <span className="text-white font-medium text-lg">{p.name} {p.name === playerName ? "(Você)" : ""}</span>
                 </div>
                 {p.name === trueHostName && (
