@@ -20,6 +20,14 @@ const TRICK_SELF_WIN_REVEAL_MS = 2000;
 const LAST_TRICK_REVEAL_MS = 3000;
 const SCOREBOARD_MS = 3000;
 
+// Prefixo que identifica um jogador controlado pelo servidor (Modo Teste,
+// "eu vs 3 IAs") — não é um jogador de verdade, então nunca terá uma conexão
+// WebSocket própria; o servidor decide e "joga" por ele automaticamente.
+const BOT_ID_PREFIX = "bot:";
+// Atraso antes de um bot agir, só pra não parecer instantâneo/robótico.
+const BOT_MIN_DELAY_MS = 500;
+const BOT_MAX_DELAY_MS = 1200;
+
 type Env = { SUPABASE_URL: string; SUPABASE_ANON_KEY: string };
 
 export default class FodinhaRoom implements Party.Server {
@@ -90,18 +98,21 @@ export default class FodinhaRoom implements Party.Server {
     return s?.username ?? null;
   }
 
+  // Upsert (não update): a sala pode nunca ter sido criada via "Criar Sala"
+  // (código digitado à mão, ou o roomId gerado pelo Modo Teste) — um PATCH
+  // simples não criaria a linha, só falharia silenciosamente.
   private async persist(state: GameState) {
     const { SUPABASE_URL, SUPABASE_ANON_KEY } = this.env;
     try {
-      await fetch(`${SUPABASE_URL}/rest/v1/rooms?id=eq.${this.room.id}`, {
-        method: "PATCH",
+      await fetch(`${SUPABASE_URL}/rest/v1/rooms`, {
+        method: "POST",
         headers: {
           apikey: SUPABASE_ANON_KEY,
           Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
           "Content-Type": "application/json",
-          Prefer: "return=minimal",
+          Prefer: "resolution=merge-duplicates,return=minimal",
         },
-        body: JSON.stringify({ state }),
+        body: JSON.stringify({ id: this.room.id, state }),
       });
     } catch {
       // best-effort — a próxima escrita corrige, e o estado em memória do
@@ -152,30 +163,75 @@ export default class FodinhaRoom implements Party.Server {
     setTimeout(async () => {
       if (!this.state || this.state.phase !== "round_end") return;
       await this.applyAndBroadcast(this.state.phase, startNextRound(this.state));
+      this.scheduleBotTurnIfNeeded();
     }, delayMs);
   }
 
-  async onMessage(raw: string | ArrayBuffer | ArrayBufferView, sender: Party.Connection) {
-    if (typeof raw !== "string") return;
-    let message: ClientMessage;
-    try {
-      message = JSON.parse(raw);
-    } catch {
-      return;
+  // ── Modo Teste: jogadores "bot:*" são controlados pelo próprio servidor,
+  // sem conexão WebSocket nenhuma — escolhem tudo aleatoriamente. ──────────
+  private isBot(playerId: string): boolean {
+    return playerId.startsWith(BOT_ID_PREFIX);
+  }
+
+  private randomBotAction(state: GameState, botId: string): ClientMessage | null {
+    const bot = state.players.find((p) => p.id === botId);
+    if (!bot) return null;
+
+    if (state.phase === "shuffling") {
+      return { type: "shuffle", playerId: botId, style: "random" };
     }
 
-    const verified = this.verifiedName(sender);
-    if (!verified) return;
-
-    // Efêmeras (emoji, aviso de método de embaralhar): só repassa, sem
-    // mexer no estado do jogo nem exigir dono da vez.
-    if (message.type === "emoji" || message.type === "shuffle_announce") {
-      this.room.broadcast(raw, [sender.id]);
-      return;
+    if (state.phase === "betting") {
+      // Mesma regra do "fechamento" que a UI usa: quem falta apostar é só
+      // esse bot, e um valor específico deixaria a soma = cartas da rodada.
+      const isClosingBet = state.players.filter((p) => p.bet === null).length === 1;
+      const forbidden = isClosingBet
+        ? state.currentRoundCards - state.players.reduce((sum, p) => sum + (p.bet ?? 0), 0)
+        : null;
+      const options: number[] = [];
+      for (let i = 0; i <= bot.cards.length; i++) {
+        if (i !== forbidden) options.push(i);
+      }
+      const bet = options[Math.floor(Math.random() * options.length)];
+      return { type: "bet", playerId: botId, bet };
     }
 
-    if ("playerId" in message && message.playerId !== verified) return;
+    if (state.phase === "playing" && bot.cards.length > 0) {
+      const cardIndex = Math.floor(Math.random() * bot.cards.length);
+      return { type: "play_card", playerId: botId, cardIndex };
+    }
 
+    return null;
+  }
+
+  // Chamado depois de toda mudança de estado: se quem tem a vez agora é um
+  // bot, agenda a jogada dele automaticamente depois de um pequeno atraso.
+  private scheduleBotTurnIfNeeded() {
+    const state = this.state;
+    if (!state) return;
+    if (state.phase !== "shuffling" && state.phase !== "betting" && state.phase !== "playing") return;
+    const actorId = state.players[state.currentPlayerIndex]?.id;
+    if (!actorId || !this.isBot(actorId)) return;
+
+    const delay = BOT_MIN_DELAY_MS + Math.random() * (BOT_MAX_DELAY_MS - BOT_MIN_DELAY_MS);
+    setTimeout(() => {
+      // Reconfere: o estado pode ter mudado nesse meio tempo (ex: alguém
+      // votou pra encerrar a partida) e não ser mais a vez desse bot.
+      const cur = this.state;
+      if (!cur) return;
+      if (cur.phase !== "shuffling" && cur.phase !== "betting" && cur.phase !== "playing") return;
+      if (cur.players[cur.currentPlayerIndex]?.id !== actorId) return;
+
+      const action = this.randomBotAction(cur, actorId);
+      if (action) void this.applyClientMessage(action);
+    }, delay);
+  }
+
+  // Núcleo de toda ação que muda o jogo — usado tanto por mensagens reais
+  // (via onMessage, já com a identidade verificada) quanto pelas jogadas
+  // automáticas dos bots do Modo Teste (que nunca passam por onMessage,
+  // já que não têm conexão WebSocket nenhuma pra verificar).
+  private async applyClientMessage(message: ClientMessage) {
     if (message.type === "start_game") {
       // Permite criar do zero (nenhuma partida ainda) ou recomeçar depois
       // de um game_over — mas nunca pisar numa partida em andamento.
@@ -184,6 +240,7 @@ export default class FodinhaRoom implements Party.Server {
         this.state?.phase ?? "waiting",
         startNextRound(createInitialState(message.players))
       );
+      this.scheduleBotTurnIfNeeded();
       return;
     }
 
@@ -191,6 +248,7 @@ export default class FodinhaRoom implements Party.Server {
 
     if (message.type === "bet") {
       await this.applyAndBroadcast(this.state.phase, handleBet(this.state, message.playerId, message.bet));
+      this.scheduleBotTurnIfNeeded();
       return;
     }
 
@@ -199,6 +257,7 @@ export default class FodinhaRoom implements Party.Server {
         this.state.phase,
         handleShuffleAndDeal(this.state, message.playerId, message.style)
       );
+      this.scheduleBotTurnIfNeeded();
       return;
     }
 
@@ -242,6 +301,7 @@ export default class FodinhaRoom implements Party.Server {
               // vaza da rodada fica visível na mesa, tableCards não zera) —
               // mas se algum dia mudar, o guard abaixo continua correto.
               if (next.phase === "round_end") this.scheduleAdvance(LAST_TRICK_REVEAL_MS + SCOREBOARD_MS);
+              else this.scheduleBotTurnIfNeeded();
             }, holdMs);
             return;
           }
@@ -250,7 +310,32 @@ export default class FodinhaRoom implements Party.Server {
 
       await this.applyAndBroadcast(prev.phase, next);
       if (next.phase === "round_end") this.scheduleAdvance(LAST_TRICK_REVEAL_MS + SCOREBOARD_MS);
+      else this.scheduleBotTurnIfNeeded();
     }
+  }
+
+  async onMessage(raw: string | ArrayBuffer | ArrayBufferView, sender: Party.Connection) {
+    if (typeof raw !== "string") return;
+    let message: ClientMessage;
+    try {
+      message = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    const verified = this.verifiedName(sender);
+    if (!verified) return;
+
+    // Efêmeras (emoji, aviso de método de embaralhar): só repassa, sem
+    // mexer no estado do jogo nem exigir dono da vez.
+    if (message.type === "emoji" || message.type === "shuffle_announce") {
+      this.room.broadcast(raw, [sender.id]);
+      return;
+    }
+
+    if ("playerId" in message && message.playerId !== verified) return;
+
+    await this.applyClientMessage(message);
   }
 }
 

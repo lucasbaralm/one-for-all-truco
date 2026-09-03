@@ -15,7 +15,11 @@ export type PlayerPresence = {
   joinedAt: string;
 };
 
-export default function RoomManager({ roomId }: { roomId: string }) {
+// Nomes só pra exibição dos 3 bots do Modo Teste — o id de verdade (que o
+// room server usa pra saber quem controlar sozinho) é sempre "bot:N".
+const BOT_NAMES = ["Robô 1", "Robô 2", "Robô 3"];
+
+export default function RoomManager({ roomId, testMode = false }: { roomId: string; testMode?: boolean }) {
   const router = useRouter();
   const [playerName, setPlayerName] = useState("");
   const [players, setPlayers] = useState<PlayerPresence[]>([]);
@@ -48,6 +52,19 @@ export default function RoomManager({ roomId }: { roomId: string }) {
       }
       const name = data.session.user.user_metadata.username || "Jogador";
       setPlayerName(name);
+
+      // Modo Teste: eu vs 3 bots, sem presença nem outros jogadores de
+      // verdade — pula direto pro jogo com uma lista de jogadores sintética
+      // (o room server reconhece o prefixo "bot:" e joga por eles sozinho).
+      if (testMode) {
+        const now = new Date().toISOString();
+        setPlayers([
+          { id: name, name, joinedAt: now },
+          ...BOT_NAMES.map((botName, i) => ({ id: `bot:${i + 1}`, name: botName, joinedAt: now })),
+        ]);
+        setStatus("playing");
+        return;
+      }
 
       // Conectar ao Supabase Realtime via Channel
       channel = supabase.channel(`room:${roomId}`, {
@@ -151,7 +168,7 @@ export default function RoomManager({ roomId }: { roomId: string }) {
       cancelled = true;
       if (channel) supabase.removeChannel(channel);
     };
-  }, [roomId, router]);
+  }, [roomId, router, testMode]);
 
   // Reconcilia a ordem combinada (seatOrder) com quem está de fato presente:
   // mantém a ordem escolhida pra quem continua na sala, tira quem saiu, e

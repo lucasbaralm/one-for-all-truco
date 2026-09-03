@@ -63,7 +63,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   return (
     <ThemeContext.Provider value={{ theme, setTheme }}>
       <div
-        className="min-h-screen flex flex-col transition-all duration-700 bg-cover bg-center bg-fixed relative"
+        className="min-h-screen flex flex-col transition-all duration-700 bg-cover bg-center relative"
         style={{ backgroundImage: `url(${THEME_BG[theme]})` }}
       >
         <div className={`absolute inset-0 ${THEME_OVERLAY[theme]} pointer-events-none z-0`} />

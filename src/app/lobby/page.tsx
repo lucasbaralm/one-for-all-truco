@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Users, Plus, ArrowRight, Trophy, History } from "lucide-react";
+import { Users, Plus, ArrowRight, Trophy, History, Bot } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 
 export default function Lobby() {
@@ -86,6 +86,13 @@ export default function Lobby() {
     e.preventDefault();
     if (!roomCode.trim()) return;
     router.push(`/game/${roomCode.toUpperCase()}`);
+  };
+
+  const handleStartTestMode = () => {
+    // Não precisa criar a linha da sala aqui — o room server faz upsert
+    // sozinho na primeira jogada. Mesmo formato de código das salas normais,
+    // só que ninguém mais vai usar esse (o Modo Teste é só pra mim + bots).
+    router.push(`/game/${generateRoomCode()}?test=1`);
   };
 
   return (
@@ -167,6 +174,26 @@ export default function Lobby() {
                 </div>
               </div>
             </form>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-zinc-900/80 border-zinc-800">
+          <CardHeader>
+            <CardTitle className="text-white flex items-center gap-2">
+              <Bot className="w-5 h-5 text-emerald-500" /> Modo Teste
+            </CardTitle>
+            <CardDescription className="text-zinc-400">
+              Você contra 3 IAs — elas embaralham, apostam e jogam totalmente ao acaso.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              onClick={handleStartTestMode}
+              variant="secondary"
+              className="w-full h-12 font-bold text-lg"
+            >
+              Jogar contra IAs
+            </Button>
           </CardContent>
         </Card>
       </motion.div>
