@@ -134,7 +134,6 @@ describe('Full round with multiple tricks', () => {
         ] },
       ],
       maxCardsLimit: 5,
-      hostId: 'p1',
       endVote: null,
     };
 
@@ -170,9 +169,6 @@ describe('Full round with multiple tricks', () => {
     expect(state.players[2].tricks).toBe(0);
     expect(state.players[2].score).toBe(0);
 
-    // hostId (metadado de rede) sobrevive à rodada sem ser mexido pelas regras do jogo.
-    expect(state.hostId).toBe('p1');
-
     // A última vaza fica visível na mesa em 'round_end' (não é limpa) — dá tempo
     // da UI mostrar o que o último jogador jogou antes de trocar pro placar.
     expect(state.tableCards).toHaveLength(3);
@@ -203,7 +199,6 @@ describe('Betting - closing rule holds across different round sizes', () => {
         tableCards: [],
         players,
         maxCardsLimit: 5,
-        hostId: null,
         endVote: null,
       };
 

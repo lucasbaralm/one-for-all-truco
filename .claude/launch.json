@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 3000
+    },
+    {
+      "name": "partykit-dev",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["partykit", "dev"],
+      "port": 1999
     }
   ]
 }

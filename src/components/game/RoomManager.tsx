@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Users, Crown, Loader2, Play } from "lucide-react";
-import { motion } from "framer-motion";
+import { Users, Crown, Loader2, Play, GripVertical } from "lucide-react";
+import { Reorder } from "framer-motion";
 import GameBoard from "./GameBoard";
 
 export type PlayerPresence = {
@@ -22,6 +22,11 @@ export default function RoomManager({ roomId }: { roomId: string }) {
   const [isHost, setIsHost] = useState(false);
   const [status, setStatus] = useState<"connecting" | "waiting" | "playing">("connecting");
   const [roomChannel, setRoomChannel] = useState<any>(null);
+  // Ordem de assentos que os jogadores escolheram arrastando na sala de espera
+  // (null = ainda ninguém mexeu, usa a ordem natural de chegada). É só de
+  // exibição/assento — puramente local + broadcast, não é regra de jogo nem
+  // decide quem é host (isso continua vindo só da presença).
+  const [seatOrder, setSeatOrder] = useState<string[] | null>(null);
 
   useEffect(() => {
     let channel: any;
@@ -70,7 +75,18 @@ export default function RoomManager({ roomId }: { roomId: string }) {
           }
 
           connectedPlayers.sort((a, b) => new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime());
-          setPlayers(connectedPlayers);
+          // Presence "sync" dispara toda hora (qualquer reconexão de QUALQUER
+          // jogador no canal, keep-alives, etc.), sempre com objetos NOVOS —
+          // mesmo quando nada realmente mudou. Sem esse guard, a lista (e os
+          // objetos de cada jogador) trocavam de referência a cada sync, o
+          // que confundia o Reorder.Item (que rastreia identidade por
+          // referência) no meio de um arraste, fazendo o item "resetar".
+          setPlayers((prev) => {
+            const changed =
+              prev.length !== connectedPlayers.length ||
+              connectedPlayers.some((cp, i) => prev[i]?.id !== cp.id || prev[i]?.joinedAt !== cp.joinedAt);
+            return changed ? connectedPlayers : prev;
+          });
 
           if (connectedPlayers.length > 0 && connectedPlayers[0].name === name) {
             setIsHost(true);
@@ -92,6 +108,12 @@ export default function RoomManager({ roomId }: { roomId: string }) {
         // (handles: guest refreshes page after game already started)
         .on("broadcast", { event: "sync_state" }, () => {
           setStatus((prev) => prev === "waiting" ? "playing" : prev);
+        })
+        // Alguém arrastou pra trocar de assento na sala de espera — todo
+        // mundo adota a mesma ordem, pra começar a partida com o assento
+        // que foi combinado, não a ordem crua de chegada.
+        .on("broadcast", { event: "seat_reorder" }, (res: any) => {
+          if (Array.isArray(res.payload?.order)) setSeatOrder(res.payload.order);
         })
         .subscribe(async (status: string) => {
           if (cancelled) return;
@@ -131,18 +153,49 @@ export default function RoomManager({ roomId }: { roomId: string }) {
     };
   }, [roomId, router]);
 
+  // Reconcilia a ordem combinada (seatOrder) com quem está de fato presente:
+  // mantém a ordem escolhida pra quem continua na sala, tira quem saiu, e
+  // põe gente nova (quem ainda não foi arrastada por ninguém) no fim.
+  const orderedPlayers = seatOrder
+    ? [
+        ...seatOrder.filter((id) => players.some((p) => p.id === id)).map((id) => players.find((p) => p.id === id)!),
+        ...players.filter((p) => !seatOrder.includes(p.id)),
+      ]
+    : players;
+
+  // Host "de verdade" pra fins de autoridade (quem chegou primeiro e segue
+  // conectado) — independente de assento, que é só estética/ordem de turno.
+  const trueHostName = players[0]?.name;
+
+  // Alguém arrastou um assento: adota localmente e avisa a mesa toda, pra
+  // todo mundo começar a partida com a mesma ordem combinada.
+  const handleSeatReorder = (newOrder: PlayerPresence[]) => {
+    const order = newOrder.map((p) => p.id);
+    setSeatOrder(order);
+    roomChannel?.send({ type: "broadcast", event: "seat_reorder", payload: { order } });
+  };
+
+  // Se alguém novo entra depois que já existia uma ordem combinada, reenvia
+  // ela pra mesa (o recém-chegado ainda não tinha recebido nenhum broadcast
+  // de reorder anterior — sem isso ele só veria a ordem crua de chegada).
+  useEffect(() => {
+    if (seatOrder && roomChannel) {
+      roomChannel.send({ type: "broadcast", event: "seat_reorder", payload: { order: seatOrder } });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [players.length]);
 
   const handleStartGame = () => {
     // Apenas o Host pode iniciar
     if (!isHost || !roomChannel) return;
-    
+
     // Enviar mensagem de BROADCAST para todos iniciarem o jogo
     roomChannel.send({
       type: "broadcast",
       event: "start_game",
       payload: { timestamp: new Date().toISOString() },
     });
-    
+
     // Muda a tela para "playing"
     setStatus("playing");
   };
@@ -158,12 +211,10 @@ export default function RoomManager({ roomId }: { roomId: string }) {
 
   if (status === "playing") {
     return (
-      <GameBoard 
-        roomId={roomId} 
-        playerName={playerName} 
-        isHost={isHost} 
-        initialPlayers={players} 
-        channel={roomChannel}
+      <GameBoard
+        roomId={roomId}
+        playerName={playerName}
+        initialPlayers={orderedPlayers}
       />
     );
   }
@@ -184,30 +235,33 @@ export default function RoomManager({ roomId }: { roomId: string }) {
       <Card className="bg-zinc-900/80 border-zinc-800">
         <CardHeader>
           <CardTitle className="text-white">Jogadores na Mesa</CardTitle>
+          <p className="text-zinc-500 text-sm">Arraste pra trocar a ordem dos assentos antes de começar.</p>
         </CardHeader>
         <CardContent>
-          <div className="space-y-3">
-            {players.map((p, idx) => (
-              <motion.div 
-                key={p.name}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                className="flex items-center justify-between bg-zinc-950 p-4 rounded-xl border border-zinc-800/50"
+          <Reorder.Group as="div" axis="y" values={orderedPlayers} onReorder={handleSeatReorder} className="space-y-3">
+            {orderedPlayers.map((p) => (
+              <Reorder.Item
+                as="div"
+                key={p.id}
+                value={p}
+                whileDrag={{ scale: 1.03, boxShadow: "0 12px 28px rgba(0,0,0,0.45)", zIndex: 10 }}
+                className="flex items-center justify-between bg-zinc-950 p-4 rounded-xl border border-zinc-800/50 cursor-grab active:cursor-grabbing"
               >
                 <div className="flex items-center gap-3">
+                  <GripVertical className="w-4 h-4 text-zinc-600 shrink-0" />
                   <div className="bg-zinc-800 w-10 h-10 rounded-full flex items-center justify-center font-bold text-white">
                     {p.name.charAt(0).toUpperCase()}
                   </div>
                   <span className="text-white font-medium text-lg">{p.name} {p.name === playerName ? "(Você)" : ""}</span>
                 </div>
-                {idx === 0 && (
-                  <div className="flex items-center gap-1 text-yellow-500 bg-yellow-500/10 px-3 py-1 rounded-full text-sm font-bold">
+                {p.name === trueHostName && (
+                  <div className="flex items-center gap-1 text-yellow-500 bg-yellow-500/10 px-3 py-1 rounded-full text-sm font-bold shrink-0">
                     <Crown className="w-4 h-4" /> Host
                   </div>
                 )}
-              </motion.div>
+              </Reorder.Item>
             ))}
-          </div>
+          </Reorder.Group>
         </CardContent>
       </Card>
 

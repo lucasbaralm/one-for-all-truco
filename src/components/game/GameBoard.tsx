@@ -1,21 +1,19 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import {
   GameState,
-  createInitialState,
-  startNextRound,
   handleBet,
   handlePlayCard,
-  handleShuffleAndDeal,
   voteToEndMatch,
   ShuffleStyle,
 } from "@/lib/game/state-machine";
 import { PlayerPresence } from "./RoomManager";
 import { Card as GameCard, getWinningCardIndex } from "@/lib/game/rules";
-import { resolveHostId } from "@/lib/game/host";
+import { ClientMessage, ServerMessage } from "@/lib/game/party-protocol";
+import { usePartySocket } from "partysocket/react";
 import { motion, AnimatePresence, LayoutGroup } from "framer-motion";
 import { Spade, Heart, Club, Diamond, SmilePlus, ChevronDown, ChevronUp, LogOut, Flag, WifiOff, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -36,21 +34,14 @@ const SHUFFLE_TYPE_LABELS: Record<string, string> = {
 const DISCONNECT_WAIT_MS = 5 * 60 * 1000;
 // Quanto tempo a última vaza da rodada fica parada na mesa (sem voar pro
 // vencedor) antes do placar aparecer — dá tempo de ver o que foi jogado.
+// (O hold de vazas NO MEIO da rodada é decidido pelo servidor — party/server.ts
+// — e o cliente só reage ao que ele manda, sem precisar de um timer próprio.)
 const LAST_TRICK_REVEAL_MS = 3000;
-// Quanto tempo uma vaza (não a última da rodada) fica parada antes de ir pro
-// vencedor. Quando quem fechou a vaza é o próprio vencedor, usa um tempo maior:
-// sem essa pausa extra, o mesmo jogador voltaria a poder jogar imediatamente
-// (é o próximo a começar a vaza seguinte) e podia acabar jogando de novo sem
-// querer, sem nem ver direito a própria carta que fechou a vaza anterior.
-const TRICK_REVEAL_MS = 1200;
-const TRICK_SELF_WIN_REVEAL_MS = 2000;
 
 interface GameBoardProps {
   roomId: string;
   playerName: string;
-  isHost: boolean;
   initialPlayers: PlayerPresence[];
-  channel: any;
 }
 
 interface TrickResult {
@@ -59,21 +50,70 @@ interface TrickResult {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GameBoard — single source of truth is Supabase DB.
-// Host mutates state and writes to DB + broadcasts.
-// Guests always accept state from broadcasts (and fall back to DB poll on reconnect).
+// GameBoard — o room server do PartyKit (party/server.ts) é a única
+// autoridade: aplica cada ação, persiste em Postgres (rooms.state) e
+// transmite o resultado pra todo mundo. Todo cliente aqui (sem distinção de
+// "host") prevê sua própria ação localmente (mesma função pura que o
+// servidor roda) pra sentir resposta instantânea, e recebe a confirmação
+// autoritativa do servidor logo em seguida.
 // ─────────────────────────────────────────────────────────────────────────────
 export default function GameBoard({
   roomId,
   playerName,
-  isHost: presenceIsHost,
   initialPlayers,
-  channel,
 }: GameBoardProps) {
   const router = useRouter();
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [emojis, setEmojis] = useState<{ id: string; emoji: string; fromPlayerId: string }[]>([]);
   const [trickResult, setTrickResult] = useState<TrickResult | null>(null);
+  // Ordem em que EU escolhi organizar minha própria mão (arrastando) — puramente
+  // visual/local, não é regra de jogo. Guarda "naipe+valor" (só existe uma
+  // cópia de cada carta no baralho, então isso já é uma chave única e estável
+  // mesmo quando o índice real da carta muda por causa de outras jogadas).
+  const [handOrderKeys, setHandOrderKeys] = useState<string[]>([]);
+  // Onde soltar uma carta arrastada pra jogar ela (a mesa) — medido via ref
+  // pra comparar com a posição do dedo/mouse no fim do arraste.
+  const tableDropRef = useRef<HTMLDivElement>(null);
+  const handRowRef = useRef<HTMLDivElement>(null);
+  const handCardElRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const registerHandCardRef = useCallback((key: string, el: HTMLDivElement | null) => {
+    if (el) handCardElRefs.current.set(key, el);
+    else handCardElRefs.current.delete(key);
+  }, []);
+  // Solta uma carta arrastada fora da mesa: reordena a mão pra posição mais
+  // próxima de onde ela foi largada (compara com o centro das outras cartas).
+  const handleHandReorder = useCallback((key: string, dropClientX: number) => {
+    setHandOrderKeys((prev) => {
+      const others = prev.filter((k) => k !== key);
+      let insertAt = others.length;
+      for (let i = 0; i < others.length; i++) {
+        const el = handCardElRefs.current.get(others[i]);
+        if (!el) continue;
+        const rect = el.getBoundingClientRect();
+        if (dropClientX < rect.left + rect.width / 2) {
+          insertAt = i;
+          break;
+        }
+      }
+      others.splice(insertAt, 0, key);
+      return others;
+    });
+  }, []);
+
+  // Sincroniza handOrderKeys com as cartas atuais da minha mão: mantém a
+  // ordem que eu escolhi pras cartas que continuam lá, tira as que já joguei,
+  // e põe cartas novas (de um deal novo) no fim — nunca reseta a ordem toda
+  // só porque uma carta foi jogada.
+  useEffect(() => {
+    const myCards = gameState?.players.find((p) => p.name === playerName)?.cards ?? [];
+    const keys = myCards.map((c) => `${c.suit}-${c.value}`);
+    setHandOrderKeys((prev) => {
+      const kept = prev.filter((k) => keys.includes(k));
+      const additions = keys.filter((k) => !kept.includes(k));
+      if (kept.length === prev.length && additions.length === 0) return prev;
+      return [...kept, ...additions];
+    });
+  }, [gameState, playerName]);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [disconnectTimer, setDisconnectTimer] = useState<{
     startedAt: number;
@@ -129,80 +169,32 @@ export default function GameBoard({
     return () => clearTimeout(t);
   }, [gameState?.phase]);
 
-  // ── Sticky host authority ────────────────────────────────────────────────
-  // `presenceIsHost` (from RoomManager) is purely "who joined earliest and is
-  // still connected" — it flips live on every reconnect, which would yank host
-  // authority back and forth mid-game. Once a game exists, authority instead
-  // follows `gameState.hostId`: it only moves on when the CURRENT host is no
-  // longer present, and never reverts to a host who reconnects later.
   const myId = playerName;
-  const isHost = useMemo(() => {
-    if (!gameState) return presenceIsHost; // Antes do primeiro fetch: usa o fallback de presença
-    return resolveHostId(gameState.hostId, initialPlayers) === myId;
-  }, [gameState, initialPlayers, presenceIsHost, myId]);
 
-  // Assim que este cliente se torna o host efetivo, grava isso no estado
-  // compartilhado para que os outros clientes também convirjam.
-  useEffect(() => {
-    if (!gameState || !isHost || gameState.hostId === myId) return;
-    const next = { ...gameState, hostId: myId };
-    setGameState(next);
-    supabase.from("rooms").update({ state: next }).eq("id", roomId).then();
-    channel.send({ type: "broadcast", event: "sync_state", payload: next });
-  }, [gameState, isHost, myId, roomId, channel]);
+  // Aplica handlePlayCard localmente e, se isso fechar uma vaza, monta o
+  // trickResult (segura a vaza na tela / bloqueia cliques via o guard
+  // `!trickResult` em isMyTurn, mais abaixo) — usado tanto pela previsão
+  // otimista de quem jogou (abaixo) quanto pela mensagem "trick_result" que
+  // o servidor manda pra todo mundo (inclusive quem já previu — se bateu,
+  // não muda nada visualmente). trickResult é limpo quando o "state"
+  // autoritativo do servidor chega (ver onMessage), não por um timer local
+  // — assim nunca desalinha do hold de verdade que o servidor está fazendo.
+  const applyPlayCardWithTrickReveal = useCallback((prev: GameState, playerId: string, cardIndex: number) => {
+    const next = handlePlayCard(prev, playerId, cardIndex);
+    const trickJustEnded =
+      prev.tableCards.length === prev.players.length - 1 && next.tableCards.length === 0;
 
-  // ── Persist + broadcast ──────────────────────────────────────────────────
-  const persistAndBroadcast = useCallback(
-    (newState: GameState, delay = 0) => {
-      supabase.from("rooms").update({ state: newState }).eq("id", roomId).then();
-      if (delay > 0) {
-        setTimeout(() => {
-          channel.send({ type: "broadcast", event: "sync_state", payload: newState });
-        }, delay);
-      } else {
-        channel.send({ type: "broadcast", event: "sync_state", payload: newState });
+    if (trickJustEnded && prev.vira) {
+      const lastCard = prev.players.find((p) => p.id === playerId)?.cards[cardIndex];
+      if (lastCard) {
+        const completedCards = [...prev.tableCards, { playerId, card: lastCard }];
+        const winIdx = getWinningCardIndex(completedCards.map((tc) => tc.card), prev.vira);
+        const winnerId = completedCards[winIdx]?.playerId;
+        if (winnerId) setTrickResult({ winnerId, cards: completedCards });
       }
-    },
-    [roomId, channel]
-  );
+    }
 
-  // ── Accept any authoritative state update ────────────────────────────────
-  const applyState = useCallback((incoming: GameState) => {
-    setGameState((prev) => {
-      // Only apply if incoming is actually different (avoid unnecessary re-renders)
-      if (prev && JSON.stringify(prev) === JSON.stringify(incoming)) return prev;
-
-      // Vaza recém-concluída no meio da rodada: quem manda esse sync_state (o
-      // host, via processCardPlay) já limpou tableCards ANTES de broadcastar,
-      // então quem só recebe o broadcast (guests) nunca via a animação "cartas
-      // indo pro vencedor" — ela só era criada localmente no cliente do host.
-      // Reconstrói a mesma vaza aqui (comparando com o que esse cliente tinha
-      // antes) pra que todo mundo, não só o host, veja a vaza e tenha a mesma
-      // pausa antes de poder jogar de novo.
-      if (
-        prev &&
-        prev.phase === "playing" &&
-        incoming.tableCards.length === 0 &&
-        prev.tableCards.length > 0 &&
-        prev.tableCards.length === prev.players.length - 1
-      ) {
-        const winner = incoming.players.find((p) => {
-          const before = prev.players.find((pp) => pp.id === p.id);
-          return !!before && p.wonCards.length > before.wonCards.length;
-        });
-        const lastPlayer = prev.players[prev.currentPlayerIndex];
-        const trick = winner?.wonCards[winner.wonCards.length - 1];
-        const lastCard = trick?.[trick.length - 1];
-        if (winner && lastPlayer && lastCard) {
-          const completedCards = [...prev.tableCards, { playerId: lastPlayer.id, card: lastCard }];
-          const holdMs = winner.id === lastPlayer.id ? TRICK_SELF_WIN_REVEAL_MS : TRICK_REVEAL_MS;
-          setTrickResult({ winnerId: winner.id, cards: completedCards });
-          setTimeout(() => setTrickResult(null), holdMs);
-        }
-      }
-
-      return incoming;
-    });
+    return next;
   }, []);
 
   // ── Floating emoji (from sender's portrait to table center, then fades) ──
@@ -212,200 +204,56 @@ export default function GameBoard({
     setTimeout(() => setEmojis((prev) => prev.filter((e) => e.id !== id)), 1800);
   }, []);
 
-  // ── Host: apply action, save, broadcast ──────────────────────────────────
-  const hostAction = useCallback(
-    (action: (prev: GameState) => GameState, broadcastDelay = 0) => {
-      if (!isHost) return;
-      setGameState((prev) => {
-        if (!prev) return prev;
-        const next = action(prev);
-        persistAndBroadcast(next, broadcastDelay);
-
-        // Save match history on game over
-        if (next.phase === "game_over" && prev.phase !== "game_over") {
-          const sorted = [...next.players].sort((a, b) => a.score - b.score);
-          supabase
-            .from("match_history")
-            .insert({
-              room_id: roomId,
-              winner_name: sorted[0].name,
-              players_summary: sorted.map((p) => ({ name: p.name, score: p.score })),
-            })
-            .then();
-        }
-        return next;
-      });
+  // ── Conexão com o room server (party/server.ts) — única autoridade ─────
+  // Cada cliente (sem distinção de "host") manda sua ação e recebe de volta
+  // o resultado autoritativo por essa mesma conexão. O token de acesso do
+  // Supabase vai como query param pro servidor verificar quem é de verdade
+  // antes de aceitar qualquer mensagem (ver onConnect em party/server.ts).
+  const socket = usePartySocket({
+    host: process.env.NEXT_PUBLIC_PARTYKIT_HOST,
+    room: roomId,
+    query: async () => {
+      const { data } = await supabase.auth.getSession();
+      return { token: data.session?.access_token ?? "", playerId: myId };
     },
-    [isHost, persistAndBroadcast, roomId]
-  );
-
-  // ── Unified card play processor (Host Only) ──────────────────────────────
-  const processCardPlay = useCallback((playerId: string, cardIndex: number) => {
-    setGameState((prev) => {
-      if (!prev || prev.phase !== "playing") return prev;
-      const currentPlayer = prev.players[prev.currentPlayerIndex];
-      if (currentPlayer.id !== playerId) return prev;
-
-      const next = handlePlayCard(prev, playerId, cardIndex);
-
-      // Trick-end animation: show cards briefly before they fly to winner
-      const trickJustEnded =
-        prev.tableCards.length === prev.players.length - 1 &&
-        next.tableCards.length === 0;
-
-      let trickHoldMs = TRICK_REVEAL_MS;
-      if (trickJustEnded && prev.vira) {
-        const lastCard = prev.players
-          .find((p) => p.id === playerId)
-          ?.cards[cardIndex];
-        if (lastCard) {
-          const completedCards = [
-            ...prev.tableCards,
-            { playerId, card: lastCard },
-          ];
-          const winIdx = getWinningCardIndex(completedCards.map((tc) => tc.card), prev.vira);
-          const winnerId = completedCards[winIdx]?.playerId;
-          if (winnerId) {
-            // Quem fechou a vaza é o mesmo que ganhou: ele seria o próximo a
-            // jogar de novo, então segura mais tempo pra dar tempo de ver a
-            // carta e não deixar clicar em outra carta sem querer.
-            trickHoldMs = winnerId === playerId ? TRICK_SELF_WIN_REVEAL_MS : TRICK_REVEAL_MS;
-            setTrickResult({ winnerId, cards: completedCards });
-            setTimeout(() => setTrickResult(null), trickHoldMs);
-          }
-        }
+    onOpen: () => {
+      // Sempre tenta criar a partida ao conectar — se a sala já tiver uma
+      // rolando, o servidor simplesmente ignora (idempotente); é assim que
+      // qualquer jogador consegue "começar" sem precisar de host eleito.
+      socket.send(
+        JSON.stringify({
+          type: "start_game",
+          players: initialPlayersRef.current.map((p) => ({ id: p.id, name: p.name })),
+        } satisfies ClientMessage)
+      );
+    },
+    onMessage: (event) => {
+      let message: ServerMessage;
+      try {
+        message = JSON.parse(event.data);
+      } catch {
+        return;
       }
-
-      // Persist and broadcast with appropriate delay
-      const delay = next.phase === "round_end" ? 1500 : trickJustEnded ? trickHoldMs : 0;
-      supabase.from("rooms").update({ state: next }).eq("id", roomId).then();
-      setTimeout(() => {
-        channel.send({ type: "broadcast", event: "sync_state", payload: next });
-      }, delay);
-
-      // Save match history on game over
-      if ((next as GameState).phase === "game_over" && String(prev.phase) !== "game_over") {
-        const sorted = [...next.players].sort((a, b) => a.score - b.score);
-        supabase.from("match_history").insert({
-          room_id: roomId,
-          winner_name: sorted[0].name,
-          players_summary: sorted.map((p) => ({ name: p.name, score: p.score })),
-        }).then();
+      if (message.type === "state") {
+        setGameState(message.state);
+        setTrickResult(null);
+      } else if (message.type === "trick_result") {
+        setTrickResult({ winnerId: message.winnerId, cards: message.cards });
+      } else if (message.type === "emoji") {
+        // Já foi adicionado otimisticamente na hora do clique, no meu próprio cliente.
+        if (message.fromPlayerId === playerName) return;
+        addFloatingEmoji(message.emoji, message.fromPlayerId);
+      } else if (message.type === "shuffle_announce") {
+        setShuffleAnnouncement({ dealerName: message.dealerName, label: message.label });
+        setTimeout(
+          () => setShuffleAnnouncement((cur) => (cur?.dealerName === message.dealerName ? null : cur)),
+          4000
+        );
       }
+    },
+  });
 
-      // Auto-advance from round_end → next round. First LAST_TRICK_REVEAL_MS shows
-      // the final trick as it was played, then the scoreboard for 3s, then advances.
-      if (next.phase === "round_end") {
-        setTimeout(() => {
-          setGameState((cur) => {
-            if (!cur || cur.phase !== "round_end") return cur;
-            const advanced = startNextRound(cur);
-            supabase.from("rooms").update({ state: advanced }).eq("id", roomId).then();
-            channel.send({ type: "broadcast", event: "sync_state", payload: advanced });
-            return advanced;
-          });
-        }, LAST_TRICK_REVEAL_MS + 3000);
-      }
-
-      return next;
-    });
-  }, [roomId, channel]);
-
-  // ── Initialization ───────────────────────────────────────────────────────
-  useEffect(() => {
-    let mounted = true;
-
-    const init = async () => {
-      // Always fetch current state from DB on mount (works for host, guests, and page refreshes)
-      const { data } = await supabase.from("rooms").select("state").eq("id", roomId).single();
-
-      if (!mounted) return;
-
-      if (data?.state) {
-        // Resume existing game
-        applyState(data.state as GameState);
-        // Host re-broadcasts so any guests who just joined get state immediately
-        if (isHost) {
-          channel.send({ type: "broadcast", event: "sync_state", payload: data.state });
-        }
-      } else if (isHost) {
-        // First run: create the game. Uses upsert (not update) because the room
-        // row may not exist yet — e.g. someone joined via a hand-typed code that
-        // was never created through "Criar Sala"; an update would silently match
-        // zero rows and the game would never actually get persisted.
-        const newState = startNextRound(createInitialState(initialPlayers));
-        await supabase.from("rooms").upsert({ id: roomId, state: newState });
-        if (!mounted) return;
-        applyState(newState);
-        channel.send({ type: "broadcast", event: "sync_state", payload: newState });
-      }
-    };
-
-    init();
-    return () => { mounted = false; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId]);
-
-  // ── Channel listeners ────────────────────────────────────────────────────
-  useEffect(() => {
-    // All players (including host) accept sync_state
-    channel.on("broadcast", { event: "sync_state" }, (res: any) => {
-      applyState(res.payload as GameState);
-    });
-
-    channel.on("broadcast", { event: "emoji" }, (res: any) => {
-      // Já foi adicionado otimisticamente na hora do clique, no meu próprio cliente.
-      // (playerId === playerName nesse app: a chave de presença É o nome.)
-      if (res.payload.fromPlayerId === playerName) return;
-      addFloatingEmoji(res.payload.emoji, res.payload.fromPlayerId);
-    });
-
-    // Guest → host: bet relay
-    channel.on("broadcast", { event: "player_bet" }, (res: any) => {
-      if (!isHost) return;
-      hostAction((prev) => handleBet(prev, res.payload.playerId, res.payload.bet));
-    });
-
-    // Guest → host: play card relay
-    channel.on("broadcast", { event: "play_card" }, (res: any) => {
-      if (!isHost) return;
-      processCardPlay(res.payload.playerId, res.payload.cardIndex);
-    });
-
-    // Guest → host: shuffle relay (the dealer rotates every round and is often
-    // NOT the host — host is who's allowed to write to the DB, dealer is a game
-    // rule. Without this relay, a non-host dealer's shuffle click did nothing).
-    channel.on("broadcast", { event: "player_shuffle" }, (res: any) => {
-      if (!isHost) return;
-      hostAction((prev) => handleShuffleAndDeal(prev, res.payload.playerId, res.payload.style));
-    });
-
-    // Anuncia pra mesa toda qual método de embaralhar foi escolhido (puramente
-    // informativo — a lógica do jogo já trata todos os tipos exceto "lucas" como
-    // um shuffle de verdade, isso aqui é só pra deixar público quem escolheu o quê).
-    channel.on("broadcast", { event: "shuffle_announce" }, (res: any) => {
-      setShuffleAnnouncement({ dealerName: res.payload.dealerName, label: res.payload.label });
-      setTimeout(() => setShuffleAnnouncement((cur) => (cur?.dealerName === res.payload.dealerName ? null : cur)), 4000);
-    });
-
-    // Guest → host: voto para encerrar a partida antes da hora
-    channel.on("broadcast", { event: "player_vote_end" }, (res: any) => {
-      if (!isHost) return;
-      hostAction((prev) => voteToEndMatch(prev, res.payload.playerId, countConnected(prev.players)));
-    });
-
-    // Periodic DB resync for guests (catch missed broadcasts)
-    const resyncInterval = setInterval(async () => {
-      if (isHost) return;
-      const { data } = await supabase.from("rooms").select("state").eq("id", roomId).single();
-      if (data?.state) applyState(data.state as GameState);
-    }, 5000);
-
-    return () => {
-      clearInterval(resyncInterval);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, isHost]);
+  const send = useCallback((message: ClientMessage) => socket.send(JSON.stringify(message)), [socket]);
 
   // ── Disconnect detection: quem está no jogo mas sumiu da presença ao vivo ──
   const connectedIds = new Set(initialPlayers.map((p) => p.id));
@@ -537,15 +385,16 @@ export default function GameBoard({
             ))}
           </div>
         </div>
-        {isHost && (
-          <Button
-            onClick={() => {
-              hostAction(() => startNextRound(createInitialState(initialPlayers)));
-            }}
-            className="w-full max-w-md h-14 text-lg font-bold bg-white text-black hover:bg-zinc-200">
-            Começar Nova Partida
-          </Button>
-        )}
+        <Button
+          onClick={() => {
+            send({
+              type: "start_game",
+              players: initialPlayers.map((p) => ({ id: p.id, name: p.name })),
+            });
+          }}
+          className="w-full max-w-md h-14 text-lg font-bold bg-white text-black hover:bg-zinc-200">
+          Começar Nova Partida
+        </Button>
         <Button variant="secondary" onClick={() => router.push("/lobby")} className="w-full max-w-md">
           <LogOut className="w-4 h-4" /> Voltar ao Menu
         </Button>
@@ -595,6 +444,50 @@ export default function GameBoard({
     );
   }
 
+  // Posição (em % do container da mesa) do assento de um jogador qualquer —
+  // "cruz" ao redor da mesa, com offset 0 (eu mesmo) sempre embaixo (180°).
+  // Reusada tanto pra plotar os oponentes quanto pra mirar a animação da vaza
+  // voando até o vencedor (inclusive quando o vencedor sou eu).
+  // Raio X menor no mobile: a caixa do avatar tem largura mínima fixa (não
+  // encolhe com a tela), então nos assentos da esquerda/direita um raio maior
+  // empurrava a caixa pra fora da viewport.
+  const isNarrowScreen = viewportWidth > 0 && viewportWidth < 640;
+  const seatRadiusX = isNarrowScreen ? 32 : 40;
+  const seatRadiusY = 32;
+  const getSeatPosition = (playerId: string) => {
+    const totalPlayers = gameState.players.length;
+    const myIndex = gameState.players.findIndex((pl) => pl.name === playerName);
+    const theirIndex = gameState.players.findIndex((pl) => pl.id === playerId);
+    const offset = (((theirIndex - myIndex) % totalPlayers) + totalPlayers) % totalPlayers;
+    const angle = (180 + offset * (360 / totalPlayers)) % 360;
+    const rad = (angle * Math.PI) / 180;
+    return {
+      left: 50 + seatRadiusX * Math.sin(rad),
+      top: 50 - seatRadiusY * Math.cos(rad),
+    };
+  };
+
+  // Minha mão, na ordem que EU escolhi (handOrderKeys) — não a ordem do
+  // servidor. originalIndex é o que precisa ir pro state machine ao jogar.
+  const orderedHandCards = me
+    ? handOrderKeys.flatMap((key) => {
+        const originalIndex = me.cards.findIndex((c) => `${c.suit}-${c.value}` === key);
+        return originalIndex === -1 ? [] : [{ key, card: me.cards[originalIndex], originalIndex }];
+      })
+    : [];
+  // Sobreposição entre cartas da mão escala com a quantidade, pra até ~13
+  // caberem numa linha só sem cortar (o baralho de 40 cartas / 3 jogadores dá
+  // no máximo 13 rodadas) — quanto mais cartas, mais elas se sobrepõem.
+  const handCardWRem = isNarrowScreen ? 4.32 : 7.2;
+  const handAvailableRem = isNarrowScreen ? 22 : 50;
+  const handOverlapRem =
+    orderedHandCards.length <= 1
+      ? 0
+      : Math.min(
+          handCardWRem * 0.72,
+          Math.max(handCardWRem * 0.22, handCardWRem - (handAvailableRem - handCardWRem) / (orderedHandCards.length - 1))
+        );
+
   // Regra do "fechamento": quem faz a última aposta da rodada não pode deixar
   // a soma das apostas igual à quantidade de cartas — um valor fica bloqueado.
   const isClosingBet = gameState.players.filter((p) => p.bet === null).length === 1;
@@ -605,36 +498,35 @@ export default function GameBoard({
       : null;
 
   // ── Action helpers ────────────────────────────────────────────────────────
+  // Manda a ação pro room server processar de verdade E aplica a mesma
+  // função pura no estado LOCAL na hora — é a mesma lógica que o servidor
+  // vai rodar, então o resultado já sai certo na tela sem esperar a
+  // ida-e-volta pela rede. Quando o "state" autoritativo chegar (onMessage,
+  // acima), ele só substitui o estado local — nada é persistido a partir
+  // dessa previsão, então não tem risco de dado nenhum: se bateu não muda
+  // nada visualmente, se não bateu só corrige.
   const sendBet = (bet: number) => {
-    if (isHost) {
-      hostAction((prev) => handleBet(prev, me!.id, bet));
-    } else {
-      channel.send({ type: "broadcast", event: "player_bet", payload: { playerId: me!.id, bet } });
-    }
+    if (!me) return;
+    send({ type: "bet", playerId: me.id, bet });
+    setGameState((prev) => (prev ? handleBet(prev, me.id, bet) : prev));
   };
 
   const sendPlayCard = (cardIndex: number) => {
-    if (!isMyTurn) return;
-    if (isHost) {
-      processCardPlay(me!.id, cardIndex);
-    } else {
-      channel.send({ type: "broadcast", event: "play_card", payload: { playerId: me!.id, cardIndex } });
-    }
+    if (!isMyTurn || !me) return;
+    send({ type: "play_card", playerId: me.id, cardIndex });
+    setGameState((prev) => (prev ? applyPlayCardWithTrickReveal(prev, me.id, cardIndex) : prev));
   };
 
   const sendEmoji = (emoji: string) => {
     if (!me) return;
     addFloatingEmoji(emoji, me.id); // otimista: aparece pra mim na hora, sem esperar o broadcast
-    channel.send({ type: "broadcast", event: "emoji", payload: { emoji, fromPlayerId: me.id } });
+    send({ type: "emoji", emoji, fromPlayerId: me.id });
   };
 
   const sendEndVote = () => {
     if (!me) return;
-    if (isHost) {
-      hostAction((prev) => voteToEndMatch(prev, me.id, countConnected(prev.players)));
-    } else {
-      channel.send({ type: "broadcast", event: "player_vote_end", payload: { playerId: me.id } });
-    }
+    send({ type: "vote_end", playerId: me.id });
+    setGameState((prev) => (prev ? voteToEndMatch(prev, me.id, countConnected(prev.players)) : prev));
   };
 
   const handleLeaveConfirmed = () => {
@@ -763,12 +655,10 @@ export default function GameBoard({
                       ? `Votar p/ encerrar (${gameState.endVote.votes.length}/${endVoteQuorum})`
                       : "Votar para encerrar a partida"}
                   </Button>
-                  {isHost && (
-                    <Button className="bg-yellow-600 hover:bg-yellow-700 text-white"
-                      onClick={() => setDisconnectTimer((prev) => prev ? { ...prev, dismissed: true } : prev)}>
-                      Continuar mesmo assim
-                    </Button>
-                  )}
+                  <Button className="bg-yellow-600 hover:bg-yellow-700 text-white"
+                    onClick={() => setDisconnectTimer((prev) => prev ? { ...prev, dismissed: true } : prev)}>
+                    Continuar mesmo assim
+                  </Button>
                 </div>
               </motion.div>
             </motion.div>
@@ -780,31 +670,18 @@ export default function GameBoard({
              sempre "embaixo" (180°). Nada de fileira, ninguém lado a lado. ── */}
         <div className="flex-1 min-h-0 relative pt-10 sm:pt-4 flex items-center justify-center">
           {others.map((p) => {
-            const totalPlayers = gameState.players.length;
-            const myIndex = gameState.players.findIndex((pl) => pl.name === playerName);
-            const theirIndex = gameState.players.findIndex((pl) => pl.id === p.id);
-            const offset = (((theirIndex - myIndex) % totalPlayers) + totalPlayers) % totalPlayers;
-            const angle = (180 + offset * (360 / totalPlayers)) % 360;
-            const rad = (angle * Math.PI) / 180;
-            // Elipse (não círculo): mais achatada em Y pra caber a altura disponível.
-            // Raio X menor no mobile: a caixa do avatar tem largura mínima fixa
-            // (não encolhe com a tela), então nos assentos da esquerda/direita
-            // um raio de 40 empurrava a caixa pra fora da viewport.
-            const isNarrowScreen = viewportWidth > 0 && viewportWidth < 640;
-            const radiusX = isNarrowScreen ? 32 : 40;
-            const radiusY = 32;
-            const left = 50 + radiusX * Math.sin(rad);
-            const top = 50 - radiusY * Math.cos(rad);
+            const { left, top } = getSeatPosition(p.id);
             return (
               <div key={p.id}
                 className="absolute flex flex-col items-center gap-1 sm:gap-2 -translate-x-1/2 -translate-y-1/2 z-10"
                 style={{ left: `${left}%`, top: `${top}%` }}>
-                {/* Won-cards piles */}
+                {/* Won-cards piles — vazas ganhas nessa rodada */}
                 {p.wonCards && p.wonCards.length > 0 && (
-                  <div className="hidden sm:flex gap-1">
+                  <div className="flex gap-0.5 sm:gap-1">
                     {p.wonCards.map((trick, trickIdx) => (
                       <motion.div key={trickIdx} initial={{ scale: 0, y: -20 }}
-                        animate={{ scale: 0.45, y: 0 }} className="relative w-24 h-36 origin-top-left">
+                        animate={{ scale: isNarrowScreen ? 0.35 : 0.45, y: 0 }}
+                        className="relative w-8 h-11 sm:w-24 sm:h-36 origin-top-left">
                         {trick.map((c, cIdx) => (
                           <div key={cIdx} className="absolute top-0 left-0"
                             style={{ transform: `rotate(${(cIdx - trick.length / 2) * 6}deg)`, zIndex: cIdx }}>
@@ -837,8 +714,20 @@ export default function GameBoard({
                       {/* Rodada cega: você vê a carta dos outros, só não a sua */}
                       <PlayingCard card={p.cards[0]} theme={theme} />
                     </div>
+                  ) : p.cards.length > 0 ? (
+                    <div className="mt-1 flex flex-col items-center gap-0.5">
+                      {/* Versos das cartas no tema escolhido — só pra imersão, não dá
+                          pra ver o valor. Limita o leque a 6 versos mesmo com mais
+                          cartas na mão, senão a caixa do avatar fica gigante. */}
+                      <div className="flex -space-x-3 sm:-space-x-5 scale-[0.42] sm:scale-[0.55] origin-top">
+                        {Array.from({ length: Math.min(p.cards.length, 6) }).map((_, i) => (
+                          <PlayingCard key={i} card={p.cards[0]} hidden theme={theme} backIndex={i} />
+                        ))}
+                      </div>
+                      <div className="text-zinc-500 text-[10px] sm:text-xs">🃏 {p.cards.length} cartas</div>
+                    </div>
                   ) : (
-                    <div className="text-zinc-500 text-[10px] sm:text-xs mt-1">🃏 {p.cards.length} cartas</div>
+                    <div className="text-zinc-500 text-[10px] sm:text-xs mt-1">🃏 0 cartas</div>
                   )}
                 </div>
               </div>
@@ -854,28 +743,6 @@ export default function GameBoard({
             </div>
           )}
 
-          {/* Shuffle phase */}
-          {gameState.phase === "shuffling" && (
-            <ShufflePanel
-              isDealer={gameState.players[gameState.dealerIndex]?.name === playerName}
-              dealerName={gameState.players[gameState.dealerIndex]?.name ?? ""}
-              onShuffle={(type) => {
-                if (!me) return;
-                const style: ShuffleStyle = type === "lucas" ? "lucas_supreme" : "random";
-                // Torna público pra mesa toda qual método foi escolhido (só informativo).
-                const announcePayload = { dealerName: me.name, label: SHUFFLE_TYPE_LABELS[type] ?? type };
-                setShuffleAnnouncement(announcePayload);
-                setTimeout(() => setShuffleAnnouncement((cur) => (cur?.dealerName === announcePayload.dealerName ? null : cur)), 4000);
-                channel.send({ type: "broadcast", event: "shuffle_announce", payload: announcePayload });
-                if (isHost) {
-                  hostAction((prev) => handleShuffleAndDeal(prev, me.id, style));
-                } else {
-                  channel.send({ type: "broadcast", event: "player_shuffle", payload: { playerId: me.id, style } });
-                }
-              }}
-            />
-          )}
-
           {/* Última vaza da rodada, parada na mesa antes do placar aparecer */}
           {gameState.phase === "round_end" && !scoreboardReady && (
             <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
@@ -884,13 +751,39 @@ export default function GameBoard({
             </motion.div>
           )}
 
-          {/* Table cards (current trick) */}
+          {/* Table cards (current trick) — tableDropRef: onde soltar uma
+              carta arrastada da mão pra jogar ela de verdade (ver HandCard). */}
           <div
-            className="relative flex items-center justify-center w-44 h-44 sm:w-72 sm:h-72 rounded-full border-2 border-dashed border-zinc-700/50 bg-cover bg-center overflow-hidden"
+            ref={tableDropRef}
+            className="relative flex items-center justify-center w-56 h-56 sm:w-[22rem] sm:h-[22rem] rounded-full border-2 border-dashed border-zinc-700/50 bg-cover bg-center overflow-hidden"
             style={{ backgroundImage: `linear-gradient(rgba(0,0,0,0.55),rgba(0,0,0,0.55)), url(${TABLE_BG[theme] ?? TABLE_BG.aquarium})` }}
           >
             {gameState.tableCards.length === 0 && gameState.phase !== "shuffling" && (
               <span className="text-zinc-600 font-bold opacity-50 text-sm">MESA VAZIA</span>
+            )}
+
+            {/* Shuffle phase — só dentro do círculo da mesa (não a mesa inteira),
+                pra não cobrir a toolbar (Menu / Votar p/ Encerrar) nem os
+                oponentes: continuam clicáveis normalmente durante o embaralhar. */}
+            {gameState.phase === "shuffling" && (
+              <ShufflePanel
+                isDealer={gameState.players[gameState.dealerIndex]?.name === playerName}
+                dealerName={gameState.players[gameState.dealerIndex]?.name ?? ""}
+                onShuffle={(type) => {
+                  if (!me) return;
+                  const style: ShuffleStyle = type === "lucas" ? "lucas_supreme" : "random";
+                  // Torna público pra mesa toda qual método foi escolhido (só informativo).
+                  const announcePayload = { dealerName: me.name, label: SHUFFLE_TYPE_LABELS[type] ?? type };
+                  setShuffleAnnouncement(announcePayload);
+                  setTimeout(() => setShuffleAnnouncement((cur) => (cur?.dealerName === announcePayload.dealerName ? null : cur)), 4000);
+                  send({ type: "shuffle_announce", ...announcePayload });
+                  // Sem previsão otimista aqui de propósito: embaralhar/distribuir
+                  // envolve sorteio (shuffleDeck), então o resultado local seria
+                  // diferente do que o servidor vai calcular de verdade — mostrar
+                  // uma mão "adivinhada" só pra trocar de novo pareceria um bug.
+                  send({ type: "shuffle", playerId: me.id, style });
+                }}
+              />
             )}
 
             {gameState.tableCards.map((tc, idx) => {
@@ -920,23 +813,33 @@ export default function GameBoard({
                 </motion.div>
               );
             })}
+          </div>
 
-            {/* Trick flyout animation */}
-            <AnimatePresence>
-              {trickResult && (
-                <motion.div key="trick-flyout" initial={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.1, y: trickResult.winnerId === me?.id ? 200 : -200 }}
+          {/* Vaza voando pro vencedor — fora do círculo da mesa (que corta
+              overflow) e por cima de tudo (z-40), pra sobrepor a mesa de
+              verdade em vez de ficar presa/cortada dentro dela. Mira o
+              assento real de quem ganhou (o mesmo cálculo usado pros
+              oponentes) — se o vencedor for eu, "meu assento" é embaixo da
+              elipse, bem na direção da minha mão. */}
+          <AnimatePresence>
+            {trickResult && (() => {
+              const { left, top } = getSeatPosition(trickResult.winnerId);
+              return (
+                <motion.div key="trick-flyout"
+                  initial={{ left: "50%", top: "50%", opacity: 1, scale: 1, x: "-50%", y: "-50%" }}
+                  animate={{ left: "50%", top: "50%", opacity: 1, scale: 1, x: "-50%", y: "-50%" }}
+                  exit={{ left: `${left}%`, top: `${top}%`, opacity: 0, scale: 0.15, x: "-50%", y: "-50%" }}
                   transition={{ duration: 0.8, ease: "easeIn" }}
-                  className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  className="absolute z-40 pointer-events-none">
                   {trickResult.cards.map((tc, idx) => (
                     <div key={idx} className="absolute" style={{ transform: `rotate(${idx * 12}deg)` }}>
                       <PlayingCard card={tc.card} theme={theme} />
                     </div>
                   ))}
                 </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+              );
+            })()}
+          </AnimatePresence>
         </div>
 
         {/* ── MY AREA ── */}
@@ -960,13 +863,15 @@ export default function GameBoard({
                 </motion.div>
               )}
 
-            <div className="flex items-end gap-1 sm:gap-4 w-full justify-center px-1 sm:px-4">
+            {/* Vazas ganhas + avatar, numa linha só */}
+            <div className="flex items-end gap-1 sm:gap-4 justify-center px-1 sm:px-4">
               {/* Won-cards pile */}
-              <div className="hidden sm:flex gap-1 items-end min-w-[60px]">
+              <div className="flex gap-0.5 sm:gap-1 items-end min-w-[36px] sm:min-w-[60px]">
                 <AnimatePresence>
                   {me.wonCards && me.wonCards.map((trick, trickIdx) => (
-                    <motion.div key={trickIdx} initial={{ scale: 0, y: 20 }} animate={{ scale: 0.5, y: 0 }}
-                      exit={{ scale: 0 }} className="relative w-24 h-36 origin-bottom-left">
+                    <motion.div key={trickIdx} initial={{ scale: 0, y: 20 }}
+                      animate={{ scale: isNarrowScreen ? 0.35 : 0.5, y: 0 }}
+                      exit={{ scale: 0 }} className="relative w-8 h-11 sm:w-24 sm:h-36 origin-bottom-left">
                       {trick.map((c, cIdx) => (
                         <div key={cIdx} className="absolute bottom-0 left-0"
                           style={{ transform: `rotate(${(cIdx - trick.length / 2) * 6}deg)`, zIndex: cIdx }}>
@@ -1012,30 +917,113 @@ export default function GameBoard({
                   <div className="text-zinc-400 text-[10px] sm:text-xs">Vazas: {me.tricks} / {me.bet !== null ? me.bet : "?"}</div>
                 </div>
               </div>
+            </div>
 
-              {/* Hand cards — layoutId enables card-fly-to-table animation */}
-              <div className="flex -space-x-4 sm:-space-x-6 z-30 relative">
-                {me.cards.map((c, i) => (
-                  <motion.div
-                    key={`hand-${roundKey}-${c.suit}-${c.value}`}
-                    layoutId={`card-${roundKey}-${c.suit}-${c.value}`}
-                    whileHover={isMyTurn ? { y: -24, scale: 1.05, zIndex: 50 } : {}}
-                    transition={{ type: "spring", stiffness: 300, damping: 25 }}
-                    onClick={() => sendPlayCard(i)}
-                    className={`relative ${isMyTurn ? "cursor-pointer hover:shadow-2xl hover:shadow-yellow-400/30" : "cursor-not-allowed opacity-80"}`}>
-                    <PlayingCard card={c} hidden={isBlindRound} theme={theme} backIndex={i} />
-                    {isMyTurn && (
-                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                        className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 bg-yellow-400 rounded-full" />
-                    )}
-                  </motion.div>
-                ))}
-              </div>
+            {/* Minha mão, numa linha própria (largura cheia) — arraste uma carta
+                pra reorganizar, ou solte ela em cima da mesa pra jogar. Um toque
+                simples (sem arrastar) não joga mais nada, de propósito: assim dá
+                pra reorganizar sem risco de jogar sem querer. */}
+            <div ref={handRowRef} className="flex items-end justify-center w-full px-1 sm:px-4 relative z-30">
+              {orderedHandCards.map(({ key, card, originalIndex }, i) => (
+                <HandCard
+                  key={key}
+                  cardKey={key}
+                  card={card}
+                  hidden={isBlindRound}
+                  theme={theme}
+                  backIndex={i}
+                  isMyTurn={isMyTurn}
+                  canDrag={gameState.phase === "playing" || gameState.phase === "betting"}
+                  marginLeftRem={i === 0 ? 0 : handOverlapRem}
+                  layoutId={`card-${roundKey}-${card.suit}-${card.value}`}
+                  onRegisterRef={registerHandCardRef}
+                  onPlay={() => sendPlayCard(originalIndex)}
+                  onReorder={handleHandReorder}
+                  tableDropRef={tableDropRef}
+                />
+              ))}
             </div>
           </div>
         )}
       </div>
     </LayoutGroup>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HAND CARD — uma carta arrastável na minha mão. Arrastar e soltar em cima da
+// mesa (tableDropRef) joga a carta de verdade; soltar em qualquer outro lugar
+// só reorganiza a mão (reordena pra posição mais próxima de onde caiu). Um
+// toque sem arrastar não faz nada — de propósito, pra não jogar sem querer
+// enquanto só se está tentando reorganizar.
+// ─────────────────────────────────────────────────────────────────────────────
+function HandCard({
+  cardKey,
+  card,
+  hidden,
+  theme,
+  backIndex,
+  isMyTurn,
+  canDrag,
+  marginLeftRem,
+  layoutId,
+  onRegisterRef,
+  onPlay,
+  onReorder,
+  tableDropRef,
+}: {
+  cardKey: string;
+  card: GameCard;
+  hidden: boolean;
+  theme: string;
+  backIndex: number;
+  isMyTurn: boolean;
+  canDrag: boolean;
+  marginLeftRem: number;
+  layoutId: string;
+  onRegisterRef: (key: string, el: HTMLDivElement | null) => void;
+  onPlay: () => void;
+  onReorder: (key: string, dropClientX: number) => void;
+  tableDropRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const [dragging, setDragging] = useState(false);
+
+  return (
+    <motion.div
+      ref={(el) => onRegisterRef(cardKey, el)}
+      layout
+      layoutId={layoutId}
+      drag={canDrag}
+      dragSnapToOrigin
+      dragElastic={0.15}
+      dragMomentum={false}
+      whileHover={isMyTurn && !dragging ? { y: -20, zIndex: 50 } : {}}
+      whileDrag={{ scale: 1.14, zIndex: 100, boxShadow: "0 22px 36px rgba(0,0,0,0.55)" }}
+      onDragStart={() => setDragging(true)}
+      onDragEnd={(_e, info) => {
+        setDragging(false);
+        const tableRect = tableDropRef.current?.getBoundingClientRect();
+        const droppedOnTable =
+          !!tableRect &&
+          info.point.x >= tableRect.left &&
+          info.point.x <= tableRect.right &&
+          info.point.y >= tableRect.top &&
+          info.point.y <= tableRect.bottom;
+        if (droppedOnTable && isMyTurn) {
+          onPlay();
+        } else {
+          onReorder(cardKey, info.point.x);
+        }
+      }}
+      transition={{ type: "spring", stiffness: 300, damping: 26 }}
+      style={{ marginLeft: `${-marginLeftRem}rem` }}
+      className={`relative ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-default opacity-90"}`}>
+      <PlayingCard card={card} hidden={hidden} theme={theme} backIndex={backIndex} />
+      {isMyTurn && !dragging && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+          className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 bg-yellow-400 rounded-full" />
+      )}
+    </motion.div>
   );
 }
 
@@ -1280,7 +1268,7 @@ function PlayingCard({
     const back = backs[backIndex % backs.length];
     return (
       <div
-        className="w-[3.6rem] h-[4.8rem] sm:w-24 sm:h-[8.4rem] rounded-lg sm:rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.6)] border-2 border-white/20 bg-cover bg-center overflow-hidden select-none"
+        className="w-[4.32rem] h-[5.76rem] sm:w-[7.2rem] sm:h-[10.08rem] rounded-lg sm:rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.6)] border-2 border-white/20 bg-cover bg-center overflow-hidden select-none"
         style={{ backgroundImage: `url(${back})` }}
       />
     );
@@ -1292,12 +1280,12 @@ function PlayingCard({
 
   return (
     <div
-      className={`w-[3.6rem] h-[4.8rem] sm:w-24 sm:h-[8.4rem] bg-white/96 backdrop-blur-sm rounded-lg sm:rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.5)] flex flex-col justify-between p-1 sm:p-2 border-2 ${isRed ? redBorder : blackBorder} ${isRed ? "text-red-600" : "text-zinc-900"} select-none`}>
-      <div className="text-xs sm:text-lg font-bold leading-none">{card.value}</div>
+      className={`w-[4.32rem] h-[5.76rem] sm:w-[7.2rem] sm:h-[10.08rem] bg-white/96 backdrop-blur-sm rounded-lg sm:rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.5)] flex flex-col justify-between p-1.5 sm:p-2.5 border-2 ${isRed ? redBorder : blackBorder} ${isRed ? "text-red-600" : "text-zinc-900"} select-none`}>
+      <div className="text-sm sm:text-[1.35rem] font-bold leading-none">{card.value}</div>
       <div className="flex-1 flex items-center justify-center">
-        <Icon className="w-5 h-5 sm:w-10 sm:h-10 fill-current" />
+        <Icon className="w-6 h-6 sm:w-12 sm:h-12 fill-current" />
       </div>
-      <div className="text-xs sm:text-lg font-bold leading-none rotate-180">{card.value}</div>
+      <div className="text-sm sm:text-[1.35rem] font-bold leading-none rotate-180">{card.value}</div>
     </div>
   );
 }

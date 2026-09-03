@@ -175,7 +175,6 @@ describe('State Machine - Gameplay Flow', () => {
         { id: 'p2', name: 'P2', score: 0, cards: [p2Card], wonCards: [], bet: 1, tricks: 0 }
       ],
       maxCardsLimit: 5,
-      hostId: null,
       endVote: null
     };
 
@@ -224,7 +223,6 @@ describe('State Machine - Gameplay Flow', () => {
         { id: 'p2', name: 'P2', score: 2, cards: [p2Card], wonCards: [], bet: 1, tricks: 0 }
       ],
       maxCardsLimit: 5,
-      hostId: null,
       endVote: null
     };
 
@@ -255,7 +253,6 @@ describe('State Machine - handleBet validation', () => {
       { id: 'p2', name: 'P2', score: 0, cards: [{ suit: 'hearts', value: '7' }, { suit: 'clubs', value: 'Q' }], wonCards: [], bet: null, tricks: 0 },
     ],
     maxCardsLimit: 5,
-    hostId: null,
     endVote: null,
   };
 
@@ -323,7 +320,6 @@ describe('State Machine - handlePlayCard validation', () => {
       { id: 'p2', name: 'P2', score: 0, cards: [{ suit: 'clubs', value: '6' }], wonCards: [], bet: 0, tricks: 0 },
     ],
     maxCardsLimit: 5,
-    hostId: null,
     endVote: null,
   };
 

@@ -24,11 +24,6 @@ export interface GameState {
   tableCards: { playerId: string; card: Card }[];
   // Não usado para limitar rounds: o teto real é ditado por generateDeck() (ver startNextRound).
   maxCardsLimit: number;
-  // Metadado de rede (não é regra de jogo): id de quem tem autoridade para mutar e
-  // persistir o estado. Mantido pela camada de UI (GameBoard/RoomManager) para que a
-  // autoridade de host seja "pegajosa" — sobrevive a reconexões e não muda de volta
-  // para um host antigo que retorna depois que outro jogador já assumiu.
-  hostId: string | null;
   // Votação em andamento para encerrar a partida antes da hora (precisa de
   // pelo menos metade da mesa). null = nenhuma votação ativa no momento.
   endVote: { votes: string[] } | null;
@@ -56,7 +51,6 @@ export function createInitialState(playerPresence: { id: string, name: string }[
     vira: null,
     tableCards: [],
     maxCardsLimit: 5, // Sobe até 5 cartas (máximo padrão da Fodinha rápida)
-    hostId: null, // Definido pela UI assim que alguém assume a autoridade de host
     endVote: null,
   };
 }
