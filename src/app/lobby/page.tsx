@@ -200,7 +200,7 @@ export default function Lobby() {
           </p>
         </div>
 
-        <Card className="bg-zinc-900/80 border-zinc-800">
+        <Card className="bg-zinc-900 border-zinc-800">
           <CardHeader>
             <CardTitle className="text-white flex items-center gap-2">
               <Plus className="w-5 h-5 text-red-500" /> Nova Sala
@@ -231,7 +231,7 @@ export default function Lobby() {
           <div className="h-px bg-zinc-800 flex-1" />
         </div>
 
-        <Card className="bg-zinc-900/80 border-zinc-800">
+        <Card className="bg-zinc-900 border-zinc-800">
           <CardHeader>
             <CardTitle className="text-white flex items-center gap-2">
               <Users className="w-5 h-5 text-blue-500" /> Entrar em Sala
@@ -267,7 +267,7 @@ export default function Lobby() {
           </CardContent>
         </Card>
 
-        <Card className="bg-zinc-900/80 border-zinc-800">
+        <Card className="bg-zinc-900 border-zinc-800">
           <CardHeader>
             <CardTitle className="text-white flex items-center gap-2">
               <Bot className="w-5 h-5 text-emerald-500" /> Modo Teste

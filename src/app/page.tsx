@@ -109,7 +109,7 @@ export default function Home() {
         transition={{ type: "spring", stiffness: 300, damping: 20 }}
         className="z-10 w-full max-w-md"
       >
-        <Card className="bg-zinc-900/80 border-zinc-800 backdrop-blur-xl shadow-2xl">
+        <Card className="bg-zinc-900 border-zinc-800 backdrop-blur-xl shadow-2xl">
           <CardHeader className="text-center space-y-2">
             <motion.div className="flex justify-center mb-4 space-x-2">
               <div className="bg-red-500/10 p-3 rounded-2xl border border-red-500/20">

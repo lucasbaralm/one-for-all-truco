@@ -257,7 +257,7 @@ export default function RoomManager({ roomId, testMode = false }: { roomId: stri
         </div>
       </div>
 
-      <Card className="bg-zinc-900/80 border-zinc-800">
+      <Card className="bg-zinc-900 border-zinc-800">
         <CardHeader>
           <CardTitle className="text-white">Jogadores na Mesa</CardTitle>
           <p className="text-zinc-500 text-sm">Arraste pra trocar a ordem dos assentos antes de começar.</p>
@@ -299,7 +299,7 @@ export default function RoomManager({ roomId, testMode = false }: { roomId: stri
           )}
         </Button>
       ) : (
-        <div className="text-center p-6 bg-zinc-900/50 rounded-xl border border-zinc-800">
+        <div className="text-center p-6 bg-zinc-900 rounded-xl border border-zinc-800">
           <Loader2 className="w-6 h-6 animate-spin text-red-500 mx-auto mb-2" />
           <p className="text-zinc-400">Aguardando o host iniciar a partida...</p>
         </div>

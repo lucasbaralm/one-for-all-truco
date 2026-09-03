@@ -327,7 +327,7 @@ export default function GameBoard({
           🃏 FIM DO ROUND {gameState.currentRoundCards}
         </motion.h2>
         <p className="text-zinc-400 text-sm">Próximo round em 3 segundos...</p>
-        <div className="bg-zinc-900/80 p-6 rounded-2xl border border-zinc-800 w-full max-w-md shadow-2xl space-y-3">
+        <div className="bg-zinc-900 p-6 rounded-2xl border border-zinc-800 w-full max-w-md shadow-2xl space-y-3">
           <h3 className="text-lg font-bold text-zinc-300 text-center mb-4">PLACAR PARCIAL</h3>
           {sorted.map((p, idx) => {
             const acertou = p.bet !== null && p.bet === p.tricks;
@@ -364,7 +364,7 @@ export default function GameBoard({
           className="text-5xl font-black text-red-500 mb-6">
           FIM DE JOGO
         </motion.h1>
-        <div className="bg-zinc-900/80 p-8 rounded-2xl border border-zinc-800 w-full max-w-md shadow-2xl">
+        <div className="bg-zinc-900 p-8 rounded-2xl border border-zinc-800 w-full max-w-md shadow-2xl">
           <h2 className="text-2xl font-bold mb-6 text-center text-zinc-300">
             PLACAR FINAL (Menos Pontos Vence)
           </h2>
@@ -492,7 +492,11 @@ export default function GameBoard({
   // caberem numa linha só sem cortar (o baralho de 40 cartas / 3 jogadores dá
   // no máximo 13 rodadas) — quanto mais cartas, mais elas se sobrepõem.
   const handCardWRem = isNarrowScreen ? 4.32 : 7.2;
-  const handAvailableRem = isNarrowScreen ? 22 : 50;
+  // Reduzido um pouco (era 22/50): o leque girado precisa de uma margem
+  // extra além da largura "reta" das cartas, senão as pontas do leque
+  // furam pra fora da viewport (o giro empurra os cantos de cima pra fora,
+  // não só a sobreposição horizontal calculada aqui).
+  const handAvailableRem = isNarrowScreen ? 18.5 : 44;
   const handOverlapRem =
     orderedHandCards.length <= 1
       ? 0
@@ -500,6 +504,13 @@ export default function GameBoard({
           handCardWRem * 0.72,
           Math.max(handCardWRem * 0.22, handCardWRem - (handAvailableRem - handCardWRem) / (orderedHandCards.length - 1))
         );
+  // Leque de verdade (cada carta gira um pouco em torno de um pivô abaixo da
+  // mão — ver transformOrigin no HandCard), não só cartas retas sobrepostas:
+  // ângulo por carta encolhe com a quantidade pra nunca passar de ~26° de
+  // ponta a ponta. Mantido moderado de propósito: o giro empurra as pontas
+  // do leque pra fora da largura "reta" calculada acima, então um leque
+  // largo demais fura a viewport mesmo com handAvailableRem reduzido.
+  const handFanStepDeg = orderedHandCards.length > 1 ? Math.min(5, 26 / (orderedHandCards.length - 1)) : 0;
 
   // Regra do "fechamento": quem faz a última aposta da rodada não pode deixar
   // a soma das apostas igual à quantidade de cartas — um valor fica bloqueado.
@@ -681,7 +692,7 @@ export default function GameBoard({
         {/* ── MESA: oponentes distribuídos em cruz ao redor, como numa mesa de
              verdade — cada um a 360°/N graus de distância do seguinte, comigo
              sempre "embaixo" (180°). Nada de fileira, ninguém lado a lado. ── */}
-        <div className="flex-1 min-h-0 relative pt-10 sm:pt-4 flex items-center justify-center">
+        <div className="flex-1 min-h-0 relative pt-[21rem] sm:pt-4 flex items-center justify-center">
           {others.map((p) => {
             const { left, top } = getSeatPosition(p.id);
             // Não centraliza verticalmente no ponto pra todo assento: um
@@ -797,19 +808,15 @@ export default function GameBoard({
               perto do topo, e a mesa grande demais colidia com ele. */}
           <div
             ref={tableDropRef}
-            className="relative flex items-center justify-center w-32 h-32 sm:w-64 sm:h-64 rounded-full border-2 border-dashed border-zinc-700/50 bg-cover bg-center overflow-hidden"
+            className="relative flex items-center justify-center w-32 h-32 sm:w-64 sm:h-64 rounded-full border-2 border-dashed border-zinc-700/50 bg-cover bg-center"
             style={{ backgroundImage: `linear-gradient(rgba(0,0,0,0.55),rgba(0,0,0,0.55)), url(${TABLE_BG[theme] ?? TABLE_BG.aquarium})` }}
           >
-            {/* Vira — dentro do círculo da mesa (não é mais um elemento solto
-                no canto da tela): assim nunca compete de espaço com um
-                assento, não importa quantos jogadores ou o quão alta fique a
-                caixa de algum oponente (ex: com pilha de vazas ganhas). */}
-            {gameState.vira && (
-              <div className="absolute top-1 left-1 sm:top-2 sm:left-2 flex flex-col items-center scale-[0.5] sm:scale-[0.65] origin-top-left z-10">
-                <span className="text-zinc-400 font-bold mb-0.5 uppercase tracking-widest text-[9px] whitespace-nowrap">Vira</span>
-                <PlayingCard card={gameState.vira} theme={theme} />
-              </div>
-            )}
+            {/* Sem overflow-hidden de propósito: a mesa é só um fundo redondo —
+                cartas em cima dela (jogadas ou a vira) não podem ser cortadas
+                pelo formato circular. O border-radius sozinho já basta pra
+                pintura de fundo (linear-gradient/imagem) sair redonda; só
+                afetava os FILHOS posicionados em cima, que é o que queremos
+                evitar. */}
 
             {gameState.tableCards.length === 0 && gameState.phase !== "shuffling" && (
               <span className="text-zinc-600 font-bold opacity-50 text-sm">MESA VAZIA</span>
@@ -907,7 +914,7 @@ export default function GameBoard({
             {gameState.phase === "betting" &&
               gameState.players[gameState.currentPlayerIndex]?.name === playerName && (
                 <motion.div initial={{ y: 30, opacity: 0 }} animate={{ y: 0, opacity: 1 }}
-                  className="bg-red-900/40 border border-red-500 p-2 sm:p-4 rounded-xl text-center space-y-2 sm:space-y-3 shadow-[0_0_30px_rgba(220,38,38,0.2)] mx-2">
+                  className="bg-red-950/95 border border-red-500 p-2 sm:p-4 rounded-xl text-center space-y-2 sm:space-y-3 shadow-[0_0_30px_rgba(220,38,38,0.2)] mx-2">
                   <h3 className="text-white font-bold text-sm sm:text-lg">Sua vez! Quantas você faz?</h3>
                   {forbiddenBet !== null && forbiddenBet >= 0 && forbiddenBet <= me.cards.length && (
                     <p className="text-red-300 text-[10px] sm:text-xs">Você não pode fechar a rodada apostando {forbiddenBet}</p>
@@ -921,8 +928,25 @@ export default function GameBoard({
                 </motion.div>
               )}
 
-            {/* Vazas ganhas + avatar, numa linha só */}
+            {/* Vira + vazas ganhas + avatar, numa linha só */}
             <div className="flex items-end gap-1 sm:gap-4 justify-center px-1 sm:px-4">
+              {/* Vira — do lado esquerdo do jogador (antes ficava dentro do
+                  círculo da mesa, competindo de espaço com o assento de cima
+                  em telas estreitas). `scale-[]` sozinho não reduz a altura
+                  reservada no layout (só a pintura — ver o mesmo problema já
+                  resolvido no leque de versos abaixo), então o wrapper fixa o
+                  tamanho já reduzido. */}
+              {gameState.vira && (
+                <div className="flex flex-col items-center gap-0.5 shrink-0">
+                  <span className="text-zinc-400 font-bold uppercase tracking-widest text-[9px] whitespace-nowrap">Vira</span>
+                  <div className="w-[2.38rem] h-[3.17rem] sm:w-[4.32rem] sm:h-[6.05rem] overflow-hidden">
+                    <div className="scale-[0.55] sm:scale-[0.6] origin-top-left">
+                      <PlayingCard card={gameState.vira} theme={theme} />
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Won-cards pile */}
               <div className="flex gap-0.5 sm:gap-1 items-end min-w-[36px] sm:min-w-[60px]">
                 <AnimatePresence>
@@ -1004,6 +1028,7 @@ export default function GameBoard({
                   isMyTurn={isMyTurn}
                   canDrag={gameState.phase === "playing" || gameState.phase === "betting"}
                   marginLeftRem={i === 0 ? 0 : handOverlapRem}
+                  fanAngle={(i - (orderedHandCards.length - 1) / 2) * handFanStepDeg}
                   layoutId={`card-${roundKey}-${card.suit}-${card.value}`}
                   onRegisterRef={registerHandCardRef}
                   onPlay={() => sendPlayCard(originalIndex)}
@@ -1035,6 +1060,7 @@ function HandCard({
   isMyTurn,
   canDrag,
   marginLeftRem,
+  fanAngle,
   layoutId,
   onRegisterRef,
   onPlay,
@@ -1049,6 +1075,7 @@ function HandCard({
   isMyTurn: boolean;
   canDrag: boolean;
   marginLeftRem: number;
+  fanAngle: number;
   layoutId: string;
   onRegisterRef: (key: string, el: HTMLDivElement | null) => void;
   onPlay: () => void;
@@ -1066,8 +1093,12 @@ function HandCard({
       dragSnapToOrigin
       dragElastic={0.15}
       dragMomentum={false}
-      whileHover={isMyTurn && !dragging ? { y: -20, zIndex: 50 } : {}}
-      whileDrag={{ scale: 1.14, zIndex: 100, boxShadow: "0 22px 36px rgba(0,0,0,0.55)" }}
+      // Leque de verdade: cada carta gira em torno de um pivô abaixo da mão
+      // (transformOrigin), não do próprio centro — daí o leque abrir "pra
+      // cima" com as pontas girando pra fora, igual um baralho na mão.
+      animate={{ rotate: fanAngle }}
+      whileHover={isMyTurn && !dragging ? { y: -24, zIndex: 50 } : {}}
+      whileDrag={{ scale: 1.14, zIndex: 100, rotate: 0, boxShadow: "0 22px 36px rgba(0,0,0,0.55)" }}
       onDragStart={() => setDragging(true)}
       onDragEnd={(_e, info) => {
         setDragging(false);
@@ -1085,7 +1116,7 @@ function HandCard({
         }
       }}
       transition={{ type: "spring", stiffness: 300, damping: 26 }}
-      style={{ marginLeft: `${-marginLeftRem}rem` }}
+      style={{ marginLeft: `${-marginLeftRem}rem`, transformOrigin: "50% 140%" }}
       className={`relative ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-default opacity-90"}`}>
       <PlayingCard card={card} hidden={hidden} theme={theme} backIndex={backIndex} />
       {isMyTurn && !dragging && (
