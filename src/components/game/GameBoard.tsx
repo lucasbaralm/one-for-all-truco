@@ -453,7 +453,10 @@ export default function GameBoard({
   // empurrava a caixa pra fora da viewport.
   const isNarrowScreen = viewportWidth > 0 && viewportWidth < 640;
   const seatRadiusX = isNarrowScreen ? 32 : 40;
-  const seatRadiusY = 32;
+  // Menor no mobile: sobra menos altura livre acima de um assento no topo pra
+  // caber a pilha de vazas ganhas (ver bottom-full logo abaixo) sem colidir
+  // com a toolbar fixa.
+  const seatRadiusY = isNarrowScreen ? 26 : 32;
   const getSeatPosition = (playerId: string) => {
     const totalPlayers = gameState.players.length;
     const myIndex = gameState.players.findIndex((pl) => pl.name === playerName);
@@ -671,77 +674,87 @@ export default function GameBoard({
         <div className="flex-1 min-h-0 relative pt-10 sm:pt-4 flex items-center justify-center">
           {others.map((p) => {
             const { left, top } = getSeatPosition(p.id);
+            // Não centraliza verticalmente no ponto pra todo assento: um
+            // assento perto do topo da elipse, com a caixa alta (pilha de
+            // vazas + leque de cartas), podia crescer pra CIMA do próprio
+            // ponto e sair da tela por cima da toolbar. Assentos de cima só
+            // crescem pra baixo a partir do ponto; de baixo (com 5+
+            // jogadores alguns passam do centro) só crescem pra cima; só os
+            // realmente no meio (assento à esquerda/direita) ficam centralizados.
+            const verticalAnchor = top < 42 ? "0%" : top > 58 ? "-100%" : "-50%";
             return (
               <div key={p.id}
-                className="absolute flex flex-col items-center gap-1 sm:gap-2 -translate-x-1/2 -translate-y-1/2 z-10"
-                style={{ left: `${left}%`, top: `${top}%` }}>
-                {/* Won-cards piles — vazas ganhas nessa rodada */}
-                {p.wonCards && p.wonCards.length > 0 && (
-                  <div className="flex gap-0.5 sm:gap-1">
-                    {p.wonCards.map((trick, trickIdx) => (
-                      <motion.div key={trickIdx} initial={{ scale: 0, y: -20 }}
-                        animate={{ scale: isNarrowScreen ? 0.35 : 0.45, y: 0 }}
-                        className="relative w-8 h-11 sm:w-24 sm:h-36 origin-top-left">
-                        {trick.map((c, cIdx) => (
-                          <div key={cIdx} className="absolute top-0 left-0"
-                            style={{ transform: `rotate(${(cIdx - trick.length / 2) * 6}deg)`, zIndex: cIdx }}>
-                            <PlayingCard card={c} theme={theme} />
-                          </div>
-                        ))}
-                      </motion.div>
-                    ))}
-                  </div>
-                )}
-
-                {activePlayerId === p.id && <ActiveArrow direction="down" />}
-
-                {/* Avatar — w-fit com min-w: cresce se o conteúdo (badge "APOSTANDO"
-                    etc.) não couber no tamanho padrão, em vez de cortar/estourar. */}
-                <div className={`bg-zinc-900 border rounded-lg sm:rounded-xl p-1.5 sm:p-3 text-center shadow-lg transition-all w-fit max-w-[34vw] sm:max-w-none ${manyOpponents ? "min-w-14 sm:min-w-24" : "min-w-16 sm:min-w-32"} ${
-                  activePlayerId === p.id
-                    ? "border-yellow-400 shadow-yellow-400/30"
-                    : "border-zinc-800"
-                }`}>
-                  <div className="font-bold text-white text-[11px] sm:text-sm whitespace-nowrap">{p.name}</div>
-                  {activePlayerId === p.id && activeActionLabel && (
-                    <div className="flex justify-center"><ActiveBadge label={activeActionLabel} /></div>
-                  )}
-                  <div className="text-red-400 text-[10px] sm:text-xs font-bold">💀 {p.score} pts</div>
-                  <div className="text-zinc-500 text-[10px] sm:text-xs">Aposta: {p.bet !== null ? p.bet : "?"}</div>
-                  <div className="text-zinc-400 text-[10px] sm:text-xs">✅ {p.tricks}/{p.bet ?? "?"}</div>
-                  {isBlindRound && p.cards.length > 0 ? (
-                    <div className="mt-1 sm:mt-2 flex justify-center scale-75 sm:scale-75 origin-top">
-                      {/* Rodada cega: você vê a carta dos outros, só não a sua */}
-                      <PlayingCard card={p.cards[0]} theme={theme} />
+                className="absolute z-10"
+                style={{ left: `${left}%`, top: `${top}%`, transform: `translate(-50%, ${verticalAnchor})` }}>
+                {/* relative: âncora local pra pilha de vazas + seta ficarem
+                    "flutuando" acima da caixa do avatar via position:absolute,
+                    em vez de fileira flex normal — assim elas NÃO entram na
+                    altura total que -translate-y-1/2 usa pra centralizar no
+                    ponto da elipse. Sem isso, um oponente com pilha de vazas
+                    ganhava tanta altura extra que a pilha era empurrada pra
+                    fora da tela por cima (bem acima da toolbar). */}
+                <div className="relative flex flex-col items-center">
+                  {(p.wonCards?.length > 0 || activePlayerId === p.id) && (
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 flex flex-col items-center gap-1 sm:gap-2">
+                      {p.wonCards && p.wonCards.length > 0 && (
+                        <div className="flex gap-0.5 sm:gap-1">
+                          {p.wonCards.map((trick, trickIdx) => (
+                            <motion.div key={trickIdx} initial={{ scale: 0, y: -20 }}
+                              animate={{ scale: isNarrowScreen ? 0.22 : 0.45, y: 0 }}
+                              className="relative w-5 h-7 sm:w-24 sm:h-36 origin-top-left">
+                              {trick.map((c, cIdx) => (
+                                <div key={cIdx} className="absolute top-0 left-0"
+                                  style={{ transform: `rotate(${(cIdx - trick.length / 2) * 6}deg)`, zIndex: cIdx }}>
+                                  <PlayingCard card={c} theme={theme} />
+                                </div>
+                              ))}
+                            </motion.div>
+                          ))}
+                        </div>
+                      )}
+                      {activePlayerId === p.id && <ActiveArrow direction="down" />}
                     </div>
-                  ) : p.cards.length > 0 ? (
-                    <div className="mt-1 flex flex-col items-center gap-0.5">
-                      {/* Versos das cartas no tema escolhido — só pra imersão, não dá
-                          pra ver o valor. Limita o leque a 6 versos mesmo com mais
-                          cartas na mão, senão a caixa do avatar fica gigante. */}
-                      <div className="flex -space-x-3 sm:-space-x-5 scale-[0.42] sm:scale-[0.55] origin-top">
-                        {Array.from({ length: Math.min(p.cards.length, 6) }).map((_, i) => (
-                          <PlayingCard key={i} card={p.cards[0]} hidden theme={theme} backIndex={i} />
-                        ))}
+                  )}
+
+                  {/* Avatar — w-fit com min-w: cresce se o conteúdo (badge "APOSTANDO"
+                      etc.) não couber no tamanho padrão, em vez de cortar/estourar. */}
+                  <div className={`bg-zinc-900 border rounded-lg sm:rounded-xl p-1.5 sm:p-3 text-center shadow-lg transition-all w-fit max-w-[34vw] sm:max-w-none ${manyOpponents ? "min-w-14 sm:min-w-24" : "min-w-16 sm:min-w-32"} ${
+                    activePlayerId === p.id
+                      ? "border-yellow-400 shadow-yellow-400/30"
+                      : "border-zinc-800"
+                  }`}>
+                    <div className="font-bold text-white text-[11px] sm:text-sm whitespace-nowrap">{p.name}</div>
+                    {activePlayerId === p.id && activeActionLabel && (
+                      <div className="flex justify-center"><ActiveBadge label={activeActionLabel} /></div>
+                    )}
+                    <div className="text-red-400 text-[10px] sm:text-xs font-bold">💀 {p.score} pts</div>
+                    <div className="text-zinc-500 text-[10px] sm:text-xs">Aposta: {p.bet !== null ? p.bet : "?"}</div>
+                    <div className="text-zinc-400 text-[10px] sm:text-xs">✅ {p.tricks}/{p.bet ?? "?"}</div>
+                    {isBlindRound && p.cards.length > 0 ? (
+                      <div className="mt-1 sm:mt-2 flex justify-center scale-75 sm:scale-75 origin-top">
+                        {/* Rodada cega: você vê a carta dos outros, só não a sua */}
+                        <PlayingCard card={p.cards[0]} theme={theme} />
                       </div>
-                      <div className="text-zinc-500 text-[10px] sm:text-xs">🃏 {p.cards.length} cartas</div>
-                    </div>
-                  ) : (
-                    <div className="text-zinc-500 text-[10px] sm:text-xs mt-1">🃏 0 cartas</div>
-                  )}
+                    ) : p.cards.length > 0 ? (
+                      <div className="mt-1 flex flex-col items-center gap-0.5">
+                        {/* Versos das cartas no tema escolhido — só pra imersão, não dá
+                            pra ver o valor. Limita o leque a 6 versos mesmo com mais
+                            cartas na mão, senão a caixa do avatar fica gigante. */}
+                        <div className="flex -space-x-3 sm:-space-x-5 scale-[0.42] sm:scale-[0.55] origin-top">
+                          {Array.from({ length: Math.min(p.cards.length, 6) }).map((_, i) => (
+                            <PlayingCard key={i} card={p.cards[0]} hidden theme={theme} backIndex={i} />
+                          ))}
+                        </div>
+                        <div className="text-zinc-500 text-[10px] sm:text-xs">🃏 {p.cards.length} cartas</div>
+                      </div>
+                    ) : (
+                      <div className="text-zinc-500 text-[10px] sm:text-xs mt-1">🃏 0 cartas</div>
+                    )}
+                  </div>
                 </div>
               </div>
             );
           })}
-
-          {/* Vira card — canto, pra não brigar de espaço com quem senta à esquerda.
-              top precisa ficar abaixo da toolbar (agora fixed no topo). */}
-          {gameState.vira && (
-            <div className="absolute left-1 sm:left-4 top-10 sm:top-4 flex flex-col items-center z-10">
-              <span className="text-zinc-400 font-bold mb-1 uppercase tracking-widest text-[10px] sm:text-xs">Vira</span>
-              <PlayingCard card={gameState.vira} theme={theme} />
-            </div>
-          )}
 
           {/* Última vaza da rodada, parada na mesa antes do placar aparecer */}
           {gameState.phase === "round_end" && !scoreboardReady && (
@@ -752,12 +765,25 @@ export default function GameBoard({
           )}
 
           {/* Table cards (current trick) — tableDropRef: onde soltar uma
-              carta arrastada da mão pra jogar ela de verdade (ver HandCard). */}
+              carta arrastada da mão pra jogar ela de verdade (ver HandCard).
+              Reduzido de propósito: com 3+ jogadores um assento sempre cai
+              perto do topo, e a mesa grande demais colidia com ele. */}
           <div
             ref={tableDropRef}
-            className="relative flex items-center justify-center w-56 h-56 sm:w-[22rem] sm:h-[22rem] rounded-full border-2 border-dashed border-zinc-700/50 bg-cover bg-center overflow-hidden"
+            className="relative flex items-center justify-center w-32 h-32 sm:w-64 sm:h-64 rounded-full border-2 border-dashed border-zinc-700/50 bg-cover bg-center overflow-hidden"
             style={{ backgroundImage: `linear-gradient(rgba(0,0,0,0.55),rgba(0,0,0,0.55)), url(${TABLE_BG[theme] ?? TABLE_BG.aquarium})` }}
           >
+            {/* Vira — dentro do círculo da mesa (não é mais um elemento solto
+                no canto da tela): assim nunca compete de espaço com um
+                assento, não importa quantos jogadores ou o quão alta fique a
+                caixa de algum oponente (ex: com pilha de vazas ganhas). */}
+            {gameState.vira && (
+              <div className="absolute top-1 left-1 sm:top-2 sm:left-2 flex flex-col items-center scale-[0.5] sm:scale-[0.65] origin-top-left z-10">
+                <span className="text-zinc-400 font-bold mb-0.5 uppercase tracking-widest text-[9px] whitespace-nowrap">Vira</span>
+                <PlayingCard card={gameState.vira} theme={theme} />
+              </div>
+            )}
+
             {gameState.tableCards.length === 0 && gameState.phase !== "shuffling" && (
               <span className="text-zinc-600 font-bold opacity-50 text-sm">MESA VAZIA</span>
             )}
