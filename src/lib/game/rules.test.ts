@@ -63,17 +63,26 @@ describe('Rules - getWinningCardIndex', () => {
     expect(winnerIdx).toBe(2); // '4' de Copas vence o '3' de Espadas
   });
 
-  it('should handle tied cards (melado) by returning the first played highest card', () => {
+  it('should break same-value ties by suit strength, never by play order', () => {
     const cards: Card[] = [
-      { suit: 'diamonds', value: 'K' },
-      { suit: 'hearts', value: 'K' }, // Empate
+      { suit: 'diamonds', value: 'K' }, // Empate de valor com o próximo, mas Ouros é o naipe mais fraco
+      { suit: 'hearts', value: 'K' },   // Copas > Ouros — deve vencer mesmo jogando depois
       { suit: 'clubs', value: 'Q' }
     ];
-    const vira: Card = { suit: 'diamonds', value: '4' };
-    
-    // Pelas regras atuais do getWinningCardIndex, se houver empate de valor e não for manilha,
-    // o findIndex pega o primeiro índice que bate com maxScore
+    const vira: Card = { suit: 'diamonds', value: '4' }; // Manilha seria 5 — nenhuma carta aqui é manilha
+
     const winnerIdx = getWinningCardIndex(cards, vira);
-    expect(winnerIdx).toBe(0); // O primeiro 'K' ganha
+    expect(winnerIdx).toBe(1); // 'K' de Copas vence o 'K' de Ouros pelo naipe
+  });
+
+  it('should let a later-played card of a stronger suit beat an earlier same-value card', () => {
+    const cards: Card[] = [
+      { suit: 'hearts', value: '2' }, // Jogada primeiro
+      { suit: 'clubs', value: '2' },  // Jogada depois — Paus > Copas, deve vencer mesmo assim
+    ];
+    const vira: Card = { suit: 'diamonds', value: 'J' }; // Manilha seria Q — '2' não é manilha aqui
+
+    const winnerIdx = getWinningCardIndex(cards, vira);
+    expect(winnerIdx).toBe(1); // 'clubs' vence por naipe, não por ordem de jogada
   });
 });

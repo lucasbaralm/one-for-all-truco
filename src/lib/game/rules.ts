@@ -14,7 +14,9 @@ const BASE_VALUE_STRENGTH: Record<Value, number> = {
   '4': 1, '5': 2, '6': 3, '7': 4, 'Q': 5, 'J': 6, 'K': 7, 'A': 8, '2': 9, '3': 10
 };
 
-// Força dos naipes para desempate de manilhas (não usado para cartas normais, garante que não mela por naipe fora da manilha)
+// Força dos naipes: usada tanto pra desempate de manilhas quanto pra desempate
+// de valor entre cartas normais (ex: dois "2" fora de manilha) — Ouros < Espadas
+// < Copas < Paus sempre, nunca "mela" por naipe.
 const SUIT_STRENGTH: Record<Suit, number> = {
   'diamonds': 1, // Ouros / Pica-fumo
   'spades': 2,   // Espadilha
@@ -62,21 +64,27 @@ export function getManilhaValue(vira: Card): Value {
  */
 export function getCardStrength(card: Card, vira: Card): number {
   const manilhaValue = getManilhaValue(vira);
-  
-  // Se for manilha, ganha um bônus enorme de 100 pontos + força do naipe (Zap ganha de Copas, etc)
+
+  // Se for manilha, ganha um bônus enorme (separado de qualquer carta normal)
+  // + força do naipe (Zap ganha de Copas, etc).
   if (card.value === manilhaValue) {
-    return 100 + SUIT_STRENGTH[card.suit];
+    return 1000 + SUIT_STRENGTH[card.suit];
   }
-  
-  // Cartas normais usam sua força base
-  return BASE_VALUE_STRENGTH[card.value];
+
+  // Cartas normais: valor base decide primeiro, mas empate de valor (ex: dois
+  // "2" fora de manilha) sempre desempata pelo naipe — Ouros < Espadas < Copas
+  // < Paus, a mesma hierarquia da manilha — nunca por quem jogou primeiro.
+  // O *10 garante que o naipe (no máximo +4) nunca "vaza" pro valor seguinte.
+  return BASE_VALUE_STRENGTH[card.value] * 10 + SUIT_STRENGTH[card.suit];
 }
 
 /**
  * Descobre qual a carta vencedora de uma rodada (vaza).
- * Quem jogou a carta mais forte ganha. Se houver empate (cangar), retorna null (ou o primeiro, dependendo da regra regional).
- * Na Fodinha, se duas pessoas jogam a maior carta com mesma força (ex: dois '3'), a vaza 'mela' ou o primeiro que jogou leva?
- * Regra padrão mais justa online: o primeiro que jogou a carta mais forte leva.
+ * Quem jogou a carta mais forte ganha. Empate de VALOR (ex: dois '3', nenhum
+ * sendo manilha) nunca "mela" — desempata pelo naipe (Ouros < Espadas < Copas
+ * < Paus), igual à hierarquia usada entre manilhas. Como não existem duas
+ * cartas iguais (mesmo valor E naipe) num baralho de verdade, getCardStrength
+ * garante uma força única por carta — empate de fato nunca acontece.
  */
 export function getWinningCardIndex(playedCards: Card[], vira: Card): number {
   if (playedCards.length === 0) return -1;
