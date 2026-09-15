@@ -756,35 +756,57 @@ export default function GameBoard({
                     <div className="text-zinc-500 text-[10px] sm:text-xs">Aposta: {p.bet !== null ? p.bet : "?"}</div>
                     <div className="text-zinc-400 text-[10px] sm:text-xs">✅ {p.tricks}/{p.bet ?? "?"}</div>
                     {isBlindRound && p.cards.length > 0 ? (
-                      <div className="mt-1 sm:mt-2 h-[4.32rem] sm:h-[7.56rem] overflow-hidden flex justify-center">
+                      <div className="mt-1 sm:mt-2 w-[3.24rem] h-[4.32rem] sm:w-[5.4rem] sm:h-[7.56rem] overflow-hidden flex justify-center mx-auto">
                         {/* Rodada cega: você vê a carta dos outros, só não a sua.
                             Mesmo motivo do leque de versos acima: scale sozinho não
-                            reduz a altura reservada no layout, só a pintura. */}
+                            reduz a altura NEM a largura reservada no layout, só a
+                            pintura — por isso o width explícito aqui também. */}
                         <div className="scale-75 sm:scale-75 origin-top">
                           <PlayingCard card={p.cards[0]} theme={theme} />
                         </div>
                       </div>
                     ) : p.cards.length > 0 ? (
-                      <div className="mt-1 flex flex-col items-center gap-0.5">
-                        {/* Versos das cartas no tema escolhido — só pra imersão, não dá
-                            pra ver o valor. Limita o leque a 6 versos mesmo com mais
-                            cartas na mão, senão a caixa do avatar fica gigante.
-                            `scale-[]` só encolhe visualmente: o layout (altura que a
-                            caixa do avatar reserva) continua sendo a do card em
-                            tamanho real (~5.76rem/10.08rem), mesmo pintando pequeno.
-                            O wrapper abaixo fixa a altura já reduzida (com
-                            overflow-hidden) pra caixa do avatar não ficar
-                            secretamente enorme e colidir com o que estiver acima
-                            dela (mesa, cartas jogadas, etc). */}
-                        <div className="h-[2.42rem] sm:h-[5.55rem] overflow-hidden">
-                          <div className="flex -space-x-3 sm:-space-x-5 scale-[0.42] sm:scale-[0.55] origin-top">
-                            {Array.from({ length: Math.min(p.cards.length, 6) }).map((_, i) => (
-                              <PlayingCard key={i} card={p.cards[0]} hidden theme={theme} backIndex={i} />
-                            ))}
+                      (() => {
+                        // Mesmo raciocínio da altura abaixo, mas pra largura: o leque
+                        // de verso tem `w-fit` fixed cardW (real, sem escala) somado
+                        // pelo `-space-x`, então o wrapper "achava" que precisava de
+                        // ~400px mesmo pintando ~220px — invisível na maioria das
+                        // telas (só sobra espaço vazio à toa), mas em viewports mais
+                        // estreitos (ex: navegador ocupando metade da tela) esse
+                        // excesso empurrava a própria caixa do avatar pra fora da
+                        // viewport e ela era cortada pelo overflow-hidden da página.
+                        const backCount = Math.min(p.cards.length, 6);
+                        const backCardW = isNarrowScreen ? 4.32 : 7.2;
+                        const backOverlap = isNarrowScreen ? 0.75 : 1.25;
+                        const backScale = isNarrowScreen ? 0.42 : 0.55;
+                        const backFanWidthRem =
+                          (backCardW + (backCount - 1) * (backCardW - backOverlap)) * backScale;
+                        return (
+                          <div className="mt-1 flex flex-col items-center gap-0.5">
+                            {/* Versos das cartas no tema escolhido — só pra imersão, não dá
+                                pra ver o valor. Limita o leque a 6 versos mesmo com mais
+                                cartas na mão, senão a caixa do avatar fica gigante.
+                                `scale-[]` só encolhe visualmente: o layout (altura E
+                                largura que a caixa do avatar reserva) continua sendo a
+                                do card em tamanho real, mesmo pintando pequeno. O
+                                wrapper abaixo fixa o tamanho já reduzido (com
+                                overflow-hidden) pra caixa do avatar não ficar
+                                secretamente enorme e colidir com o que estiver ao redor
+                                dela (mesa, cartas jogadas, borda da viewport, etc). */}
+                            <div
+                              className="h-[2.42rem] sm:h-[5.55rem] overflow-hidden"
+                              style={{ width: `${backFanWidthRem}rem` }}
+                            >
+                              <div className="flex -space-x-3 sm:-space-x-5 scale-[0.42] sm:scale-[0.55] origin-top">
+                                {Array.from({ length: backCount }).map((_, i) => (
+                                  <PlayingCard key={i} card={p.cards[0]} hidden theme={theme} backIndex={i} />
+                                ))}
+                              </div>
+                            </div>
+                            <div className="text-zinc-500 text-[10px] sm:text-xs">🃏 {p.cards.length} cartas</div>
                           </div>
-                        </div>
-                        <div className="text-zinc-500 text-[10px] sm:text-xs">🃏 {p.cards.length} cartas</div>
-                      </div>
+                        );
+                      })()
                     ) : (
                       <div className="text-zinc-500 text-[10px] sm:text-xs mt-1">🃏 0 cartas</div>
                     )}
