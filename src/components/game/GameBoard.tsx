@@ -692,7 +692,13 @@ export default function GameBoard({
         {/* ── MESA: oponentes distribuídos em cruz ao redor, como numa mesa de
              verdade — cada um a 360°/N graus de distância do seguinte, comigo
              sempre "embaixo" (180°). Nada de fileira, ninguém lado a lado. ── */}
-        <div className="flex-1 min-h-0 relative pt-[16vh] sm:pt-[6vh] flex items-center justify-center">
+        {/* [container-type:size]: dá aos filhos (o círculo, ver abaixo) uma
+             unidade cqh que mede a altura REAL desta mesa, não a da viewport
+             — assim o círculo encolhe sozinho quando MY AREA (aposta +
+             leque de botões + mão) cresce e sobra menos espaço aqui, em vez
+             de precisar recalibrar um pt-[Xvh] toda vez que algum estado
+             (rodada grande, painel de aposta visível) muda quanto sobra. */}
+        <div className="flex-1 min-h-0 relative [container-type:size]">
           {others.map((p) => {
             const { left, top } = getSeatPosition(p.id);
             // Não centraliza verticalmente no ponto pra todo assento: um
@@ -826,12 +832,25 @@ export default function GameBoard({
 
           {/* Table cards (current trick) — tableDropRef: onde soltar uma
               carta arrastada da mão pra jogar ela de verdade (ver HandCard).
-              Reduzido de propósito: com 3+ jogadores um assento sempre cai
-              perto do topo, e a mesa grande demais colidia com ele. */}
+              Absolute em 50%/50% (o MESMO centro cru que getSeatPosition já
+              usa pros oponentes, e que o flyout da vaza embaixo já assume em
+              seu "initial/animate") — antes o círculo era um filho flex
+              centralizado e deslocado por um pt-[Xvh] próprio, um sistema de
+              coordenadas *diferente* do usado pelos oponentes/flyout, que
+              divergia cada vez mais conforme o padding crescia. Largura em
+              min(Xrem, Ycqh): cqh mede a altura desta própria mesa (ver
+              [container-type:size] no pai), então o círculo encolhe sozinho
+              quando MY AREA rouba espaço da mesa, em vez de vazar por cima
+              do painel de aposta como um tamanho fixo em rem faria. */}
           <div
             ref={tableDropRef}
-            className="relative flex items-center justify-center w-32 h-32 sm:w-64 sm:h-64 rounded-full border-2 border-dashed border-zinc-700/50 bg-cover bg-center"
-            style={{ backgroundImage: `linear-gradient(rgba(0,0,0,0.55),rgba(0,0,0,0.55)), url(${TABLE_BG[theme] ?? TABLE_BG.aquarium})` }}
+            className="absolute flex items-center justify-center w-[min(8rem,40cqh)] h-[min(8rem,40cqh)] sm:w-[min(16rem,44cqh)] sm:h-[min(16rem,44cqh)] rounded-full border-2 border-dashed border-zinc-700/50 bg-cover bg-center"
+            style={{
+              left: "50%",
+              top: "50%",
+              transform: "translate(-50%, -50%)",
+              backgroundImage: `linear-gradient(rgba(0,0,0,0.55),rgba(0,0,0,0.55)), url(${TABLE_BG[theme] ?? TABLE_BG.aquarium})`,
+            }}
           >
             {/* Sem overflow-hidden de propósito: a mesa é só um fundo redondo —
                 cartas em cima dela (jogadas ou a vira) não podem ser cortadas
