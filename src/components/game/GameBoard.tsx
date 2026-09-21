@@ -692,7 +692,7 @@ export default function GameBoard({
         {/* ── MESA: oponentes distribuídos em cruz ao redor, como numa mesa de
              verdade — cada um a 360°/N graus de distância do seguinte, comigo
              sempre "embaixo" (180°). Nada de fileira, ninguém lado a lado. ── */}
-        <div className="flex-1 min-h-0 relative pt-[21rem] sm:pt-4 flex items-center justify-center">
+        <div className="flex-1 min-h-0 relative pt-[16vh] sm:pt-[6vh] flex items-center justify-center">
           {others.map((p) => {
             const { left, top } = getSeatPosition(p.id);
             // Não centraliza verticalmente no ponto pra todo assento: um
