@@ -1,331 +1,208 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { motion } from "framer-motion";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Users, Plus, ArrowRight, Trophy, History, Bot, Camera, Loader2 } from "lucide-react";
-import { supabase } from "@/lib/supabase/client";
-import { PlayerAvatar } from "@/components/game/PlayerAvatar";
+import { ArrowRight, Club, Diamond, Heart, Spade } from "lucide-react";
+import { ProfileHeader } from "@/components/lobby/ProfileHeader";
+import { MatchHistory } from "@/components/lobby/MatchHistory";
+import { LUDO_COLORS } from "@/components/ludo/colors";
 
-const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+// Menu inicial depois do login: aqui a pessoa decide qual jogo vai jogar.
+// Cada jogo tem o próprio lobby (salas, entrar por código, contra bots).
 
-export default function Lobby() {
-  const router = useRouter();
-  const [playerName, setPlayerName] = useState("");
-  const [userId, setUserId] = useState("");
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-  const [uploadingAvatar, setUploadingAvatar] = useState(false);
-  const [avatarError, setAvatarError] = useState("");
-  const avatarInputRef = useRef<HTMLInputElement>(null);
-  const [roomCode, setRoomCode] = useState("");
-  const [history, setHistory] = useState<any[]>([]);
-  const [creatingRoom, setCreatingRoom] = useState(false);
-  const [createRoomError, setCreateRoomError] = useState("");
-
-  useEffect(() => {
-    const fetchUser = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!data.session) {
-        router.push("/");
-        return;
-      }
-      // Pega o nome verdadeiro salvo no metadata
-      setPlayerName(data.session.user.user_metadata.username || "Jogador");
-      setUserId(data.session.user.id);
-      setAvatarUrl(data.session.user.user_metadata.avatar_url ?? null);
-    };
-
-    const fetchHistory = async () => {
-      const { data } = await supabase
-        .from("match_history")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(5);
-      if (data) {
-        setHistory(data);
-      }
-    };
-
-    fetchUser();
-    fetchHistory();
-  }, [router]);
-
-  // Upload da foto de perfil: guarda no bucket "avatars" do Supabase Storage
-  // (precisa existir e ter as policies certas — ver instruções no README/chat)
-  // sob o path do próprio usuário, e salva a URL pública no user_metadata pra
-  // ficar "salvo na conta pra sempre" e visível pros outros via presença.
-  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = ""; // permite escolher o mesmo arquivo de novo depois
-    if (!file || !userId) return;
-
-    setAvatarError("");
-
-    if (!file.type.startsWith("image/")) {
-      setAvatarError("Escolha um arquivo de imagem.");
-      return;
-    }
-    if (file.size > MAX_AVATAR_BYTES) {
-      setAvatarError("Imagem muito grande (máximo 5MB).");
-      return;
-    }
-
-    setUploadingAvatar(true);
-    try {
-      const ext = file.name.includes(".") ? file.name.split(".").pop() : "jpg";
-      const path = `${userId}/avatar.${ext}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("avatars")
-        .upload(path, file, { upsert: true });
-      if (uploadError) {
-        setAvatarError("Não foi possível enviar a foto. Tente novamente.");
-        return;
-      }
-
-      const { data: publicUrlData } = supabase.storage.from("avatars").getPublicUrl(path);
-      // Cache-bust: o path não muda num re-upload (upsert), então sem isso o
-      // navegador (e outros jogadores) continuariam vendo a imagem antiga em cache.
-      const publicUrl = `${publicUrlData.publicUrl}?v=${Date.now()}`;
-
-      const { error: updateError } = await supabase.auth.updateUser({ data: { avatar_url: publicUrl } });
-      if (updateError) {
-        setAvatarError("Foto enviada, mas não deu pra salvar no perfil. Tente de novo.");
-        return;
-      }
-
-      setAvatarUrl(publicUrl);
-    } catch {
-      setAvatarError("Ocorreu um erro ao enviar a foto.");
-    } finally {
-      setUploadingAvatar(false);
-    }
-  };
-
-  const generateRoomCode = () => {
-    // Gera um código aleatório de 4 letras para a sala
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    let code = "";
-    for (let i = 0; i < 4; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return code;
-  };
-
-  const handleCreateRoom = async () => {
-    setCreatingRoom(true);
-    setCreateRoomError("");
-
-    // Com apenas 26^4 códigos possíveis e salas que nunca expiram, colisão é
-    // questão de tempo — tenta algumas vezes com um código novo se acontecer.
-    const MAX_ATTEMPTS = 5;
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const code = generateRoomCode();
-      const { error } = await supabase.from("rooms").insert({ id: code });
-
-      if (!error) {
-        router.push(`/game/${code}`);
-        return;
-      }
-
-      // 23505 = violação de unicidade no Postgres (código já existe): tenta outro.
-      if (error.code !== "23505") {
-        setCreateRoomError("Não foi possível criar a sala. Tente novamente.");
-        setCreatingRoom(false);
-        return;
-      }
-    }
-
-    setCreateRoomError("Não foi possível gerar um código de sala único. Tente novamente.");
-    setCreatingRoom(false);
-  };
-
-  const handleJoinRoom = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!roomCode.trim()) return;
-    router.push(`/game/${roomCode.toUpperCase()}`);
-  };
-
-  const handleStartTestMode = () => {
-    // Não precisa criar a linha da sala aqui — o room server faz upsert
-    // sozinho na primeira jogada. Mesmo formato de código das salas normais,
-    // só que ninguém mais vai usar esse (o Modo Teste é só pra mim + bots).
-    router.push(`/game/${generateRoomCode()}?test=1`);
-  };
-
+function FodinhaArt() {
+  const cards = [
+    { rot: -16, x: -34, icon: <Spade className="h-7 w-7 text-zinc-900" />, label: "A" },
+    { rot: 0, x: 0, icon: <Heart className="h-7 w-7 fill-red-500 text-red-500" />, label: "K" },
+    { rot: 16, x: 34, icon: <Diamond className="h-7 w-7 fill-red-500 text-red-500" />, label: "7" },
+  ];
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-4">
+    <div className="relative flex h-32 items-end justify-center">
+      {cards.map((c, i) => (
+        <motion.div
+          key={i}
+          className="absolute flex h-24 w-16 flex-col items-center justify-between rounded-lg border border-zinc-300 bg-white px-1 py-1.5 shadow-xl"
+          style={{ x: c.x, rotate: c.rot, transformOrigin: "50% 120%" }}
+          animate={{ rotate: [c.rot, c.rot + (i - 1) * 4, c.rot] }}
+          transition={{ duration: 4 + i, repeat: Infinity, ease: "easeInOut" }}
+        >
+          <span className="self-start text-sm font-black text-zinc-800">{c.label}</span>
+          {c.icon}
+          <span className="self-end rotate-180 text-sm font-black text-zinc-800">{c.label}</span>
+        </motion.div>
+      ))}
+      <Club className="absolute -right-1 top-1 h-8 w-8 text-white/20" />
+    </div>
+  );
+}
+
+function LudoArt() {
+  const corner = (x: number, y: number, color: keyof typeof LUDO_COLORS) => (
+    <g key={color}>
+      <rect x={x} y={y} width="36" height="36" rx="5" fill={LUDO_COLORS[color].main} />
+      <rect x={x + 7} y={y + 7} width="22" height="22" rx="4" fill="#fffdf6" />
+      <circle cx={x + 18} cy={y + 18} r="6.5" fill={LUDO_COLORS[color].dark} />
+    </g>
+  );
+  return (
+    <div className="relative flex h-32 items-center justify-center">
+      <motion.svg
+        viewBox="0 0 100 100"
+        className="h-28 w-28 drop-shadow-xl"
+        animate={{ rotate: [0, 4, 0, -4, 0] }}
+        transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+      >
+        <rect width="100" height="100" rx="8" fill="#fbf4e4" />
+        {corner(0, 0, "red")}
+        {corner(64, 0, "green")}
+        {corner(64, 64, "blue")}
+        {corner(0, 64, "yellow")}
+        <polygon points="36,36 64,36 50,50" fill={LUDO_COLORS.green.main} />
+        <polygon points="64,36 64,64 50,50" fill={LUDO_COLORS.blue.main} />
+        <polygon points="36,64 64,64 50,50" fill={LUDO_COLORS.yellow.main} />
+        <polygon points="36,36 36,64 50,50" fill={LUDO_COLORS.red.main} />
+      </motion.svg>
+      <motion.div
+        className="absolute -right-0 -top-1 flex h-11 w-11 items-center justify-center rounded-xl border border-black/10 bg-white shadow-xl"
+        animate={{ y: [0, -10, 0], rotate: [0, 18, -12, 0] }}
+        transition={{ duration: 2.6, repeat: Infinity, ease: "easeInOut" }}
+      >
+        <div className="grid h-7 w-7 grid-cols-3 grid-rows-3">
+          {[0, 2, 4, 6, 8].map((i) => (
+            <span key={i} className="m-auto h-1.5 w-1.5 rounded-full bg-zinc-800" style={{ gridArea: `${Math.floor(i / 3) + 1} / ${(i % 3) + 1}` }} />
+          ))}
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function DobbleArt() {
+  const circles = [
+    { x: -38, y: 6, size: 64, emojis: ["🍎", "🐶", "⭐", "🔑"], rot: -14 },
+    { x: 38, y: 14, size: 64, emojis: ["🐶", "🌵", "🎈", "🦊"], rot: 12 },
+    { x: 0, y: -6, size: 74, emojis: ["🔑", "🌵", "🍎", "🐙", "🚀"], rot: 0 },
+  ];
+  return (
+    <div className="relative flex h-32 items-center justify-center">
+      {circles.map((c, i) => (
+        <motion.div
+          key={i}
+          className="absolute grid place-items-center rounded-full border-2 border-white bg-white shadow-xl"
+          style={{ width: c.size, height: c.size, x: c.x, y: c.y, rotate: c.rot, zIndex: i === 2 ? 2 : 1 }}
+          animate={{ rotate: [c.rot, c.rot + (i % 2 ? -8 : 8), c.rot], y: [c.y, c.y - 4, c.y] }}
+          transition={{ duration: 4 + i, repeat: Infinity, ease: "easeInOut" }}
+        >
+          <div className="grid grid-cols-3 place-items-center text-[0.8rem] leading-none">
+            {c.emojis.map((e, k) => (
+              <span key={k} style={{ transform: `rotate(${(k * 67) % 90 - 40}deg)` }}>{e}</span>
+            ))}
+          </div>
+        </motion.div>
+      ))}
+    </div>
+  );
+}
+
+function GameCard({
+  href,
+  title,
+  tagline,
+  chips,
+  accent,
+  art,
+  delay,
+}: {
+  href: string;
+  title: string;
+  tagline: string;
+  chips: string[];
+  accent: string;
+  art: React.ReactNode;
+  delay: number;
+}) {
+  return (
+    <motion.div
+      initial={{ y: 30, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      transition={{ duration: 0.5, delay }}
+      whileHover={{ y: -6, scale: 1.02 }}
+      whileTap={{ scale: 0.98 }}
+    >
+      <Link
+        href={href}
+        className="group relative block overflow-hidden rounded-3xl border border-white/10 bg-zinc-900/90 p-5 shadow-2xl backdrop-blur-xl transition-colors hover:border-white/30"
+      >
+        <div
+          className="pointer-events-none absolute inset-0 opacity-30 transition-opacity group-hover:opacity-60"
+          style={{ background: `radial-gradient(circle at 50% 0%, ${accent}, transparent 65%)` }}
+        />
+        <div className="relative">
+          {art}
+          <h2 className="mt-3 text-3xl font-black tracking-tight text-white">{title}</h2>
+          <p className="mt-1 min-h-[2.5rem] text-sm text-zinc-400">{tagline}</p>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {chips.map((c) => (
+              <span key={c} className="rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-xs font-semibold text-zinc-300">
+                {c}
+              </span>
+            ))}
+          </div>
+          <div className="mt-4 flex items-center gap-1.5 text-sm font-bold text-white">
+            Jogar <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+          </div>
+        </div>
+      </Link>
+    </motion.div>
+  );
+}
+
+export default function GameMenu() {
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center p-4 py-10">
       <motion.div
         initial={{ y: 20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ duration: 0.5 }}
-        className="w-full max-w-md space-y-6"
+        className="w-full max-w-5xl space-y-6"
       >
-        <div className="text-center space-y-3">
-          <h1 className="text-3xl font-black text-white">LOBBY</h1>
-
-          <div className="flex flex-col items-center gap-2">
-            <button
-              type="button"
-              onClick={() => avatarInputRef.current?.click()}
-              disabled={uploadingAvatar}
-              className="relative group rounded-full disabled:cursor-wait"
-              title="Trocar foto de perfil"
-            >
-              <PlayerAvatar avatarUrl={avatarUrl} name={playerName} className="w-20 h-20 text-2xl" />
-              <div className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                {uploadingAvatar ? (
-                  <Loader2 className="w-6 h-6 text-white animate-spin" />
-                ) : (
-                  <Camera className="w-6 h-6 text-white" />
-                )}
-              </div>
-            </button>
-            <input
-              ref={avatarInputRef}
-              type="file"
-              accept="image/*"
-              onChange={handleAvatarChange}
-              className="hidden"
-            />
-            {avatarError && <p className="text-red-500 text-xs font-bold max-w-xs">{avatarError}</p>}
-          </div>
-
-          <p className="text-zinc-400">
-            Bem-vindo(a), <span className="text-red-500 font-bold">{playerName}</span>!
-          </p>
+        <div className="space-y-3 text-center">
+          <h1 className="text-3xl font-black text-white">ESCOLHA O JOGO</h1>
+          <ProfileHeader />
         </div>
 
-        <Card className="bg-zinc-900 border-zinc-800">
-          <CardHeader>
-            <CardTitle className="text-white flex items-center gap-2">
-              <Plus className="w-5 h-5 text-red-500" /> Nova Sala
-            </CardTitle>
-            <CardDescription className="text-zinc-400">
-              Crie uma sala e convide seus amigos.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <Button
-              onClick={handleCreateRoom}
-              disabled={creatingRoom}
-              className="w-full h-12 bg-red-600 hover:bg-red-700 text-white font-bold text-lg"
-            >
-              {creatingRoom ? "Criando..." : "Criar Sala"}
-            </Button>
-            {createRoomError && (
-              <div className="text-red-500 text-sm font-bold bg-red-900/20 p-3 rounded-md border border-red-900/50">
-                {createRoomError}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <div className="flex items-center gap-4 py-2">
-          <div className="h-px bg-zinc-800 flex-1" />
-          <span className="text-zinc-500 font-medium uppercase text-sm">ou</span>
-          <div className="h-px bg-zinc-800 flex-1" />
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          <GameCard
+            href="/lobby/fodinha"
+            title="Fodinha"
+            tagline="Aposte quantas vazas você faz e não erre a conta. Cartas, blefe e muita resenha."
+            chips={["Cartas", "Online", "Contra IAs"]}
+            accent="#ef4444"
+            art={<FodinhaArt />}
+            delay={0.05}
+          />
+          <GameCard
+            href="/lobby/ludo"
+            title="Ludo"
+            tagline="Role o dado, capture os adversários e leve os 4 peões até em casa primeiro."
+            chips={["2–4 jogadores", "Online", "Contra bots"]}
+            accent="#3b82f6"
+            art={<LudoArt />}
+            delay={0.15}
+          />
+          <GameCard
+            href="/lobby/dobble"
+            title="Dobble"
+            tagline="Duas cartas, um símbolo igual. Seja o primeiro a achar — e não erre o clique!"
+            chips={["2–8 jogadores", "Online", "Contra bots"]}
+            accent="#6366f1"
+            art={<DobbleArt />}
+            delay={0.25}
+          />
         </div>
-
-        <Card className="bg-zinc-900 border-zinc-800">
-          <CardHeader>
-            <CardTitle className="text-white flex items-center gap-2">
-              <Users className="w-5 h-5 text-blue-500" /> Entrar em Sala
-            </CardTitle>
-            <CardDescription className="text-zinc-400">
-              Já tem um código? Digite abaixo para jogar.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleJoinRoom} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="code" className="text-zinc-300">Código da Sala</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="code"
-                    placeholder="Ex: XF8K"
-                    value={roomCode}
-                    onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-                    maxLength={4}
-                    className="bg-zinc-950/50 border-zinc-800 text-white placeholder:text-zinc-600 h-12 text-lg uppercase tracking-widest font-mono"
-                    autoComplete="off"
-                  />
-                  <Button
-                    type="submit"
-                    className="h-12 w-12 bg-white text-black hover:bg-zinc-200"
-                    disabled={roomCode.length < 3}
-                  >
-                    <ArrowRight className="w-5 h-5" />
-                  </Button>
-                </div>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-zinc-900 border-zinc-800">
-          <CardHeader>
-            <CardTitle className="text-white flex items-center gap-2">
-              <Bot className="w-5 h-5 text-emerald-500" /> Modo Teste
-            </CardTitle>
-            <CardDescription className="text-zinc-400">
-              Você contra 3 Bots eles embaralham, apostam e jogam totalmente ao acaso.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button
-              onClick={handleStartTestMode}
-              variant="secondary"
-              className="w-full h-12 font-bold text-lg"
-            >
-              Jogar contra IAs
-            </Button>
-          </CardContent>
-        </Card>
       </motion.div>
 
-      {/* Histórico de Partidas */}
-      <motion.div
-        initial={{ y: 20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ duration: 0.5, delay: 0.2 }}
-        className="w-full max-w-md mt-8 space-y-4"
-      >
-        <div className="flex items-center gap-2 text-white/80">
-          <History className="w-5 h-5" />
-          <h2 className="text-xl font-bold">Últimas Partidas</h2>
-        </div>
-
-        {history.length === 0 ? (
-          <div className="text-zinc-500 text-center py-4 bg-black/40 rounded-xl border border-white/5">
-            Nenhuma partida foi jogada ainda.
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {history.map((match) => (
-              <div key={match.id} className="bg-black/40 p-4 rounded-xl border border-white/10 flex flex-col gap-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-400 text-xs">Sala: {match.room_id}</span>
-                  <span className="text-zinc-500 text-xs">
-                    {new Date(match.created_at).toLocaleDateString()}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Trophy className="w-4 h-4 text-yellow-500" />
-                  <span className="text-white font-bold text-lg">{match.winner_name} venceu!</span>
-                </div>
-                <div className="text-sm text-zinc-400">
-                  {match.players_summary.map((p: any) => `${p.name} (${p.score})`).join(" • ")}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </motion.div>
+      <MatchHistory limit={6} />
     </div>
   );
 }

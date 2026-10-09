@@ -143,3 +143,197 @@
     }
   }
 }
+
+/* ── Ludo ────────────────────────────────────────────────────────────────────
+   Layout estrutural (nada de números mágicos por tela): o palco mede o espaço
+   que sobrou e o tabuleiro vira o maior quadrado que cabe nele.
+   • Retrato: painéis dos jogadores em cima e embaixo do tabuleiro.
+   • Paisagem (palco bem mais largo que alto): painéis nas laterais.
+   Cada cor ocupa o canto do tabuleiro onde ela mora (tl/tr/br/bl). */
+.ludo-stage {
+  container-type: size;
+  display: grid;
+  place-items: center;
+  flex: 1 1 0%;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+.ludo-layout {
+  --gap: 0.5rem;
+  --panel-h: 4.6rem;
+  --dice: 2.9rem;
+  --s: max(10rem, min(100cqw, calc(100cqh - 2 * var(--panel-h) - 2 * var(--gap))));
+  display: grid;
+  gap: var(--gap);
+  width: var(--s);
+  height: calc(var(--s) + 2 * var(--panel-h) + 2 * var(--gap));
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: var(--panel-h) var(--s) var(--panel-h);
+  grid-template-areas:
+    "tl tr"
+    "board board"
+    "bl br";
+}
+
+@container (min-aspect-ratio: 13/10) {
+  .ludo-layout {
+    --dice: 3.6rem;
+    --s: max(10rem, min(100cqh, calc(100cqw - 2 * 11rem - 2 * var(--gap))));
+    --pw: clamp(11rem, calc((100cqw - var(--s)) / 2 - var(--gap)), 17rem);
+    width: calc(var(--s) + 2 * var(--pw) + 2 * var(--gap));
+    height: var(--s);
+    grid-template-columns: var(--pw) var(--s) var(--pw);
+    grid-template-rows: 1fr 1fr;
+    grid-template-areas:
+      "tl board tr"
+      "bl board br";
+  }
+  .ludo-panel[data-area="tl"],
+  .ludo-panel[data-area="tr"] {
+    align-self: start;
+  }
+  .ludo-panel[data-area="bl"],
+  .ludo-panel[data-area="br"] {
+    align-self: end;
+  }
+}
+
+@keyframes ludo-ping {
+  0% { transform: scale(1); opacity: 0.9; }
+  70%, 100% { transform: scale(1.35); opacity: 0; }
+}
+@keyframes ludo-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-14%); }
+}
+@keyframes ludo-marker {
+  0%, 100% { opacity: 0.75; }
+  50% { opacity: 1; }
+}
+@keyframes ludo-base-pulse {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 1; }
+}
+.ludo-ping { animation: ludo-ping 1.3s cubic-bezier(0, 0, 0.2, 1) infinite; }
+.ludo-bob { animation: ludo-bob 0.7s ease-in-out infinite; }
+.ludo-marker { animation: ludo-marker 1s ease-in-out infinite; }
+.ludo-base-pulse { animation: ludo-base-pulse 1.1s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ludo-ping, .ludo-bob, .ludo-marker, .ludo-base-pulse { animation: none; }
+}
+
+/* Painel com altura fixa: o dado entrando no painel ativo não pode empurrar nada. */
+.ludo-panel > div {
+  min-height: calc(var(--dice) + 1.1rem);
+}
+
+/* ── Dobble ──────────────────────────────────────────────────────────────────
+   Mesma ideia do Ludo: o palco mede o espaço que sobrou e as duas cartas
+   (a do centro e a minha) viram os maiores círculos que cabem.
+   • Retrato: oponentes numa faixa em cima, carta do centro, minha carta.
+   • Paisagem: oponentes numa coluna à esquerda, as duas cartas lado a lado. */
+.dobble-stage {
+  container-type: size;
+  display: grid;
+  place-items: center;
+  flex: 1 1 0%;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+.dobble-layout {
+  --gap: 0.5rem;
+  --strip: 4.8rem;
+  --c: max(9rem, min(100cqw, calc((100cqh - var(--strip) - 2 * var(--gap)) / 2)));
+  display: grid;
+  gap: var(--gap);
+  width: min(100cqw, max(var(--c), 36rem));
+  height: calc(var(--strip) + 2 * var(--c) + 2 * var(--gap));
+  grid-template-columns: 100%;
+  grid-template-rows: var(--strip) var(--c) var(--c);
+  grid-template-areas:
+    "opp"
+    "center"
+    "mine";
+}
+/* muitos oponentes: a faixa ganha uma segunda linha */
+.dobble-layout[data-rows="2"] {
+  --strip: 9.2rem;
+}
+
+.dobble-opp {
+  grid-area: opp;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-content: flex-start;
+  gap: 0.4rem;
+  min-height: 0;
+  overflow: hidden;
+}
+.dobble-center,
+.dobble-mine {
+  position: relative;
+  justify-self: center;
+  align-self: center;
+  width: var(--c);
+  height: var(--c);
+}
+.dobble-center { grid-area: center; }
+.dobble-mine { grid-area: mine; }
+
+.dobble-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  width: 5rem;
+  padding: 0.3rem 0.25rem;
+}
+
+@container (min-aspect-ratio: 13/10) {
+  .dobble-layout {
+    --ow: 13rem;
+    --c: max(9rem, min(100cqh, calc((100cqw - var(--ow) - 2 * var(--gap)) / 2)));
+    width: calc(var(--ow) + 2 * var(--c) + 2 * var(--gap));
+    height: var(--c);
+    grid-template-columns: var(--ow) var(--c) var(--c);
+    grid-template-rows: var(--c);
+    grid-template-areas: "opp center mine";
+  }
+  .dobble-opp {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-y: auto;
+  }
+  .dobble-tile {
+    flex-direction: row;
+    width: 100%;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+  }
+}
+
+@keyframes dobble-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-3.5%); }
+  40% { transform: translateX(3.5%); }
+  60% { transform: translateX(-2.5%); }
+  80% { transform: translateX(2.5%); }
+}
+.dobble-shake { animation: dobble-shake 0.4s ease-in-out; }
+
+@keyframes dobble-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.0); }
+  50% { box-shadow: 0 0 0 6px rgba(250, 204, 21, 0.55); }
+}
+.dobble-pulse { animation: dobble-pulse 1.1s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dobble-shake, .dobble-pulse { animation: none; }
+}

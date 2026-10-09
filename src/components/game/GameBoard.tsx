@@ -420,7 +420,7 @@ export default function GameBoard({
           className="w-full max-w-md h-14 text-lg font-bold bg-white text-black hover:bg-zinc-200">
           Começar Nova Partida
         </Button>
-        <Button variant="secondary" onClick={() => router.push("/lobby")} className="w-full max-w-md">
+        <Button variant="secondary" onClick={() => router.push("/lobby/fodinha")} className="w-full max-w-md">
           <LogOut className="w-4 h-4" /> Voltar ao Menu
         </Button>
       </div>
@@ -658,7 +658,7 @@ export default function GameBoard({
   };
 
   const handleLeaveConfirmed = () => {
-    router.push("/lobby");
+    router.push("/lobby/fodinha");
   };
 
   // ─────────────────────────────────────────────────────────────────────────
