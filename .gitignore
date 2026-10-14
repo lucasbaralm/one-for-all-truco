@@ -36,8 +36,14 @@ yarn-error.log*
 # vercel
 .vercel
 
-# partykit (local dev state/cache from `partykit dev`)
+# partykit (estado local antigo, de antes do PartyServer)
 .partykit/
+
+# wrangler / Worker dos room servers (estado local do `wrangler dev` e variáveis locais)
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
 
 # typescript
 *.tsbuildinfo

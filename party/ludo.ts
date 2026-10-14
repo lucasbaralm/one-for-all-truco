@@ -1,10 +1,9 @@
-import type * as Party from "partykit/server";
 import { LudoController } from "../src/lib/ludo/controller";
 import { LudoState, createLobby } from "../src/lib/ludo/engine";
 import { LUDO_EMOJIS, LudoServerMessage } from "../src/lib/ludo/protocol";
 import { ControllerHooks, GameRoom, RoomController } from "./game-room";
 
-// Room server do Ludo (party "ludo" em partykit.json). Mesma ideia da Fodinha:
+// Room server do Ludo (binding "Ludo" em wrangler.jsonc). Mesma ideia da Fodinha:
 // o servidor é a única autoridade — aplica cada ação com as regras de
 // src/lib/ludo, rola o dado, joga pelos bots e transmite o resultado pra
 // todo mundo. Autenticação, salas, reconexão e histórico vêm de GameRoom
@@ -15,7 +14,7 @@ export default class LudoRoom extends GameRoom<LudoState> {
     const env = this.room.env as unknown as { LUDO_SPEED?: string };
     return new LudoController(createLobby(), {
       ...hooks,
-      // Só o teste ponta a ponta define LUDO_SPEED (partykit dev --var LUDO_SPEED=8).
+      // Só o teste ponta a ponta define LUDO_SPEED (wrangler dev --var LUDO_SPEED:8).
       speed: Number(env.LUDO_SPEED) || 1,
     });
   }
@@ -58,4 +57,3 @@ export default class LudoRoom extends GameRoom<LudoState> {
   }
 }
 
-LudoRoom satisfies Party.Worker;

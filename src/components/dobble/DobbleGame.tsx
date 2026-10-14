@@ -5,20 +5,27 @@
    efeitos abaixo atualizam estado. */
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, Eye, HelpCircle, LogOut, SmilePlus, Trophy, Volume2, VolumeX, WifiOff } from "lucide-react";
+import { Bot, Eye, HelpCircle, LogOut, SmilePlus, Volume2, VolumeX, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Confetti } from "@/components/Confetti";
+import { FeedHistoryButton, FeedList } from "@/components/feed/EventFeed";
+import { GameOverPanel } from "@/components/GameOverPanel";
 import { PlayerAvatar } from "@/components/game/PlayerAvatar";
 import { SYMBOLS } from "@/lib/dobble/cards";
+import { playerColor } from "@/lib/dobble/colors";
 import { BOT_LEVEL_LABEL, cardsLabel } from "@/lib/dobble/labels";
 import type { DobblePlayerView } from "@/lib/dobble/engine";
 import { DOBBLE_ERROR_LABEL } from "@/lib/dobble/protocol";
+import { fmtSeconds, myChips, standingLine } from "@/lib/dobble/summary";
+import { nextWrongReaction } from "@/lib/dobble/wrongReaction";
+import { resultHeadline } from "@/lib/gameResult";
 import { REACTION_EMOJIS } from "@/lib/party-codes";
+import { useTurnAlert } from "@/lib/useTurnAlert";
 import { DobbleCard } from "./DobbleCard";
 import { DobbleRulesDialog } from "./DobbleRules";
 import { sfx } from "./sfx";
+import { useDobbleFeed } from "./useDobbleFeed";
 import { DobbleSession, isSoloVsBots } from "./useDobbleSession";
 
 interface Box {
@@ -64,7 +71,7 @@ export default function DobbleGame({ session, onExit, title }: DobbleGameProps) 
   const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
   /** 3, 2, 1 e 0 = "Já!" (null = sem contagem). */
   const [count, setCount] = useState<number | null>(null);
-  const [lockedMs, setLockedMs] = useState(0);
+  const [locked, setLocked] = useState(false);
   const [wrongMark, setWrongMark] = useState<{ key: number; symbol: number } | null>(null);
   const [shakeKey, setShakeKey] = useState(0);
   const [tileShake, setTileShake] = useState<{ id: string; key: number } | null>(null);
@@ -72,6 +79,8 @@ export default function DobbleGame({ session, onExit, title }: DobbleGameProps) 
   const [hide, setHide] = useState<"center" | "mine" | null>(null);
 
   useEffect(() => setSoundOn(sfx.isEnabled()), []);
+
+  const feed = useDobbleFeed(view, me);
 
   const phase = view?.phase;
   const round = view?.round;
@@ -147,16 +156,20 @@ export default function DobbleGame({ session, onExit, title }: DobbleGameProps) 
   // ── erro de símbolo: o meu faz a carta tremer e trava; o dos outros balança o cartão deles
   const seenWrong = useRef<number | null>(null);
   const wrongSeq = wrong?.seq;
+  const viewReady = !!view;
   useEffect(() => {
-    if (!wrong) return;
-    if (seenWrong.current === null) {
-      seenWrong.current = wrong.seq; // erro antigo (reconexão): não reage
-      return;
-    }
-    if (wrong.seq === seenWrong.current) return;
-    seenWrong.current = wrong.seq;
+    if (!viewReady) return;
+    // Erro que já estava lá quando a tela abriu (reconexão) não reage; o primeiro erro de verdade da partida reage.
+    const r = nextWrongReaction(seenWrong.current, wrongSeq);
+    seenWrong.current = r.seen;
+    if (!r.react || !wrong) return;
     if (wrong.playerId === me) {
       sfx.wrong();
+      try {
+        navigator.vibrate?.(120); // celular: um tranco no erro
+      } catch {
+        // sem vibração neste aparelho
+      }
       setShakeKey(wrong.seq);
       setWrongMark({ key: wrong.seq, symbol: wrong.symbol });
       const t = setTimeout(() => setWrongMark(null), 800);
@@ -164,19 +177,25 @@ export default function DobbleGame({ session, onExit, title }: DobbleGameProps) 
     }
     setTileShake({ id: wrong.playerId, key: wrong.seq });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wrongSeq]);
+  }, [wrongSeq, viewReady]);
 
-  // ── castigo restante (medido no relógio do servidor)
+  // ── castigo (medido no relógio do servidor): aqui só liga e desliga UMA vez, com um timer.
+  // A contagem que anda de 0,1 em 0,1s fica dentro do LockOverlay — se ela mexesse no estado
+  // desta tela, as duas cartas (8 emojis grandes cada) seriam redesenhadas 10 vezes por segundo.
+  const serverNow = session.serverNow;
   useEffect(() => {
-    if (!myLock) {
-      setLockedMs(0);
+    const remaining = myLock ? myLock - serverNow() : 0;
+    if (remaining <= 0) {
+      setLocked(false);
       return;
     }
-    const tick = () => setLockedMs(Math.max(0, myLock - session.serverNow()));
-    tick();
-    const id = setInterval(tick, 100);
-    return () => clearInterval(id);
-  }, [myLock, session]);
+    setLocked(true);
+    const t = setTimeout(() => setLocked(false), remaining);
+    return () => clearTimeout(t);
+  }, [myLock, serverNow]);
+
+  // Partida começando com a aba em segundo plano: o título da aba pisca.
+  useTurnAlert(phase === "countdown" && !!view?.players.some((p) => p.id === me), "A partida vai começar!");
 
   // ── fim de jogo
   const endSoundFor = useRef(0);
@@ -196,6 +215,25 @@ export default function DobbleGame({ session, onExit, title }: DobbleGameProps) 
     session.clearError();
   }, [session]);
 
+  // O clique num símbolo é uma função ESTÁVEL (a identidade nunca muda): sem isso o React
+  // redesenharia as cartas inteiras a cada atualização da tela, porque a prop mudou.
+  const send = session.send;
+  const canClickNow = phase === "playing" && !locked && !!view?.players.some((p) => p.id === me);
+  const claimRef = useRef({ canClick: false, round: 0 });
+  useEffect(() => {
+    claimRef.current = { canClick: canClickNow, round: round ?? 0 };
+  });
+  const onSymbol = useCallback(
+    (symbol: number) => {
+      const { canClick: allowed, round: r } = claimRef.current;
+      if (!allowed) return;
+      sfx.unlock();
+      sfx.pop();
+      send({ type: "claim", symbol, round: r });
+    },
+    [send]
+  );
+
   if (!view) return null;
 
   const players = view.players;
@@ -206,17 +244,9 @@ export default function DobbleGame({ session, onExit, title }: DobbleGameProps) 
   const hasOtherHumans = players.some((p) => !p.bot && p.id !== me);
   const gameOver = phase === "game_over";
   const faceDown = phase === "countdown" || phase === "lobby";
-  const locked = lockedMs > 0;
-  const canClick = phase === "playing" && !!mine && !locked;
+  const canClick = canClickNow;
   const found = phase === "round_end" ? claim : null;
   const winnerName = players.find((p) => p.id === view.winnerId)?.name;
-
-  const onSymbol = (symbol: number) => {
-    if (!canClick) return;
-    sfx.unlock();
-    sfx.pop();
-    session.send({ type: "claim", symbol, round: view.round });
-  };
 
   // ── texto de status
   let statusText = "";
@@ -272,6 +302,7 @@ export default function DobbleGame({ session, onExit, title }: DobbleGameProps) 
             </span>
           )}
           <div className="flex items-center gap-1">
+            <FeedHistoryButton entries={feed.entries} />
             {hasOtherHumans && !spectator && (
               <button
                 onClick={() => setShowEmojis((v) => !v)}
@@ -323,34 +354,42 @@ export default function DobbleGame({ session, onExit, title }: DobbleGameProps) 
         {/* palco */}
         <div className="dobble-stage">
           <div className="dobble-layout" data-rows={opponents.length > 4 ? "2" : "1"}>
-            {/* oponentes */}
-            <div className="dobble-opp">
-              {opponents.map((p) => (
-                <OpponentTile
-                  key={p.id}
-                  player={p}
-                  mode={view.mode}
-                  faceDown={faceDown}
-                  winning={phase === "round_end" && claim?.playerId === p.id}
-                  shakeKey={tileShake?.id === p.id ? tileShake.key : 0}
-                  emojis={session.emojis.filter((e) => e.fromPlayerId === p.id)}
-                  register={(el) => {
-                    if (el) tileRefs.current.set(p.id, el);
-                    else tileRefs.current.delete(p.id);
-                  }}
-                />
-              ))}
+            {/* oponentes + histórico (o histórico só aparece em tela larga) */}
+            <div className="dobble-side">
+              <div className="dobble-opp">
+                {opponents.map((p) => (
+                  <OpponentTile
+                    key={p.id}
+                    player={p}
+                    color={playerColor(players, p.id)}
+                    mode={view.mode}
+                    faceDown={faceDown}
+                    winning={phase === "round_end" && claim?.playerId === p.id}
+                    shakeKey={tileShake?.id === p.id ? tileShake.key : 0}
+                    emojis={session.emojis.filter((e) => e.fromPlayerId === p.id)}
+                    register={(el) => {
+                      if (el) tileRefs.current.set(p.id, el);
+                      else tileRefs.current.delete(p.id);
+                    }}
+                  />
+                ))}
+              </div>
+              <div className="dobble-feed">
+                <FeedList entries={feed.entries} visible={6} />
+              </div>
             </div>
 
             {/* carta do centro */}
             <div className="dobble-center" ref={centerRef} style={{ opacity: hide === "center" ? 0 : 1 }}>
-              <AnimatePresence mode="popLayout" initial={false}>
+              <AnimatePresence initial={false}>
                 <motion.div
                   key={`c-${view.gameNumber}-${centerFaceDown ? "back" : view.center}`}
                   className="absolute inset-0"
+                  style={{ willChange: "transform, opacity" }}
                   initial={{ scale: 0.4, rotate: -30, opacity: 0, y: -40 }}
                   animate={{ scale: 1, rotate: 0, opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.85 }}
+                  // A carta velha some NA HORA: fazer as duas se esmaecerem juntas deixava uma sobreposição borrada de 16 emojis.
+                  exit={{ opacity: 0, transition: { duration: 0 } }}
                   transition={{ type: "spring", stiffness: 260, damping: 22 }}
                 >
                   <DobbleCard
@@ -363,19 +402,33 @@ export default function DobbleGame({ session, onExit, title }: DobbleGameProps) 
                   />
                 </motion.div>
               </AnimatePresence>
+
+              {/* quem ganhou a rodada, bem na frente: nome na cor dele + tempo */}
+              <AnimatePresence>
+                {phase === "round_end" && claim && !gameOver && (
+                  <RoundBanner
+                    key={claim.seq}
+                    name={claim.playerId === me ? "Você" : (players.find((p) => p.id === claim.playerId)?.name ?? "Alguém")}
+                    avatarUrl={players.find((p) => p.id === claim.playerId)?.avatarUrl ?? null}
+                    color={playerColor(players, claim.playerId)}
+                    reactionMs={claim.reactionMs}
+                  />
+                )}
+              </AnimatePresence>
             </div>
 
             {/* a minha carta */}
             <div className="dobble-mine" ref={mineRef} style={{ opacity: hide === "mine" ? 0 : 1 }}>
               {mine ? (
                 <div key={`shake-${shakeKey}`} className={shakeKey ? "dobble-shake absolute inset-0" : "absolute inset-0"}>
-                  <AnimatePresence mode="popLayout" initial={false}>
+                  <AnimatePresence initial={false}>
                     <motion.div
                       key={`m-${view.gameNumber}-${faceDown || mine.hand === null ? "back" : mine.hand}`}
                       className="absolute inset-0"
+                      style={{ willChange: "transform, opacity" }}
                       initial={{ scale: 0.4, rotate: 25, opacity: 0, y: 40 }}
                       animate={{ scale: 1, rotate: 0, opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.85 }}
+                      exit={{ opacity: 0, transition: { duration: 0 } }}
                       transition={{ type: "spring", stiffness: 260, damping: 22 }}
                     >
                       <DobbleCard
@@ -391,24 +444,15 @@ export default function DobbleGame({ session, onExit, title }: DobbleGameProps) 
                   </AnimatePresence>
 
                   {/* castigo */}
-                  <AnimatePresence>
-                    {locked && (
-                      <motion.div
-                        className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-full bg-red-700/60 text-white backdrop-blur-[1px]"
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0 }}
-                      >
-                        <span className="text-[calc(var(--c)*0.2)] leading-none">✋</span>
-                        <span className="text-[calc(var(--c)*0.1)] font-black tabular-nums">{(lockedMs / 1000).toFixed(1)}s</span>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                  <AnimatePresence>{locked && <LockOverlay until={myLock} serverNow={serverNow} />}</AnimatePresence>
 
                   {/* etiqueta */}
-                  <div className="absolute -bottom-1 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/15 bg-black/75 px-2.5 py-1 text-xs font-bold text-white backdrop-blur">
-                    <PlayerAvatar avatarUrl={mine.avatarUrl} name={mine.name} className="h-5 w-5 text-[0.6rem]" />
+                  <div className="absolute -bottom-1 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/15 bg-black/80 px-2.5 py-1 text-xs font-bold text-white">
+                    <span className="rounded-full" style={{ boxShadow: `0 0 0 2px ${playerColor(players, me)}` }}>
+                      <PlayerAvatar avatarUrl={mine.avatarUrl} name={mine.name} className="h-5 w-5 text-[0.6rem]" />
+                    </span>
                     {mine.name} <span className="text-zinc-400">· {cardsLabel(mine.cards, mode ?? "tower")}</span>
+                    <AnimatePresence>{found?.playerId === me && <ScorePop key={found.seq} mode={view.mode} />}</AnimatePresence>
                     <AnimatePresence>
                       {session.emojis
                         .filter((e) => e.fromPlayerId === me)
@@ -440,12 +484,13 @@ export default function DobbleGame({ session, onExit, title }: DobbleGameProps) 
               <motion.div
                 key={count}
                 className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center"
+                style={{ willChange: "transform, opacity" }}
                 initial={{ scale: 2.2, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.6, opacity: 0 }}
                 transition={{ duration: 0.35 }}
               >
-                <span className="text-[min(40vw,14rem)] font-black leading-none text-white drop-shadow-[0_6px_24px_rgba(0,0,0,0.7)]">
+                <span className="text-[min(40vw,14rem)] font-black leading-none text-white [text-shadow:0_6px_24px_rgba(0,0,0,0.7)]">
                   {count === 0 ? "Já!" : count}
                 </span>
               </motion.div>
@@ -486,57 +531,27 @@ export default function DobbleGame({ session, onExit, title }: DobbleGameProps) 
       {/* fim de partida */}
       <AnimatePresence>
         {gameOver && view.standings && (
-          <>
-            {view.winnerId === me && <Confetti />}
-            <motion.div
-              className="fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
-              <motion.div
-                className="w-full max-w-sm rounded-3xl border border-zinc-700 bg-zinc-900 p-6 text-center shadow-2xl"
-                initial={{ scale: 0.7, y: 40 }}
-                animate={{ scale: 1, y: 0 }}
-                transition={{ type: "spring", stiffness: 220, damping: 18 }}
-              >
-                <motion.div
-                  animate={{ rotate: [0, -8, 8, -4, 0], scale: [1, 1.15, 1] }}
-                  transition={{ duration: 1.2, delay: 0.3 }}
-                  className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-full bg-yellow-400/15"
-                >
-                  <Trophy className="h-9 w-9 text-yellow-400" />
-                </motion.div>
-                <p className="text-sm font-semibold uppercase tracking-widest text-zinc-400">{view.winnerId === me ? "Você venceu!" : "Fim de jogo"}</p>
-                <h2 className="mb-4 text-3xl font-black text-white">{winnerName}</h2>
-                <div className="mb-5 space-y-2">
-                  {view.standings.map((s, i) => (
-                    <motion.div
-                      key={s.playerId}
-                      initial={{ x: -20, opacity: 0 }}
-                      animate={{ x: 0, opacity: 1 }}
-                      transition={{ delay: 0.25 + i * 0.1 }}
-                      className="flex items-center gap-3 rounded-xl bg-black/40 px-3 py-2"
-                    >
-                      <span className="w-5 text-lg font-black text-zinc-500">{i + 1}</span>
-                      <span className="flex-1 truncate text-left font-bold text-white">{s.name}</span>
-                      <span className="text-sm text-zinc-400">{mode === "tower" ? cardsLabel(s.cards, "tower") : s.cards === 0 ? "acabou!" : `faltavam ${s.cards}`}</span>
-                    </motion.div>
-                  ))}
-                </div>
-                <div className="flex flex-col gap-2">
-                  {!spectator && (
-                    <Button onClick={session.playAgain} className="h-11 bg-white font-bold text-black hover:bg-zinc-200">
-                      {soloVsBots ? "Jogar de novo" : "Voltar para a sala"}
-                    </Button>
-                  )}
-                  <Button variant="secondary" onClick={onExit} className="h-10">
-                    <LogOut className="h-4 w-4" /> Sair
-                  </Button>
-                </div>
-              </motion.div>
-            </motion.div>
-          </>
+          <GameOverPanel
+            key="game-over"
+            headline={resultHeadline(
+              view.standings.map((s) => ({ id: s.playerId, name: s.name })),
+              view.winnerId,
+              mine ? me : null
+            )}
+            myStats={myChips(view.standings.find((s) => s.playerId === me))}
+            rows={view.standings.map((s) => ({
+              id: s.playerId,
+              name: s.name,
+              color: playerColor(players, s.playerId),
+              detail: mode === "tower" ? cardsLabel(s.cards, "tower") : s.cards === 0 ? "acabou!" : `faltavam ${s.cards}`,
+              stats: standingLine(s),
+              isMe: s.playerId === me,
+            }))}
+            actions={[
+              ...(!spectator ? [{ label: soloVsBots ? "Jogar de novo" : "Voltar para a sala", onClick: session.playAgain, primary: true }] : []),
+              { label: "Sair", onClick: onExit, icon: <LogOut className="h-4 w-4" /> },
+            ]}
+          />
         )}
       </AnimatePresence>
 
@@ -577,10 +592,34 @@ export default function DobbleGame({ session, onExit, title }: DobbleGameProps) 
   );
 }
 
+// ── Castigo: a contagem regressiva anda sozinha, só este pedaço redesenha ─────────────
+
+function LockOverlay({ until, serverNow }: { until: number; serverNow: () => number }) {
+  const [ms, setMs] = useState(() => Math.max(0, until - serverNow()));
+  useEffect(() => {
+    const tick = () => setMs(Math.max(0, until - serverNow()));
+    tick();
+    const id = setInterval(tick, 100);
+    return () => clearInterval(id);
+  }, [until, serverNow]);
+  return (
+    <motion.div
+      className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-full bg-red-700/65 text-white"
+      initial={{ opacity: 0, scale: 0.9 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      <span className="text-[calc(var(--c)*0.2)] leading-none">✋</span>
+      <span className="text-[calc(var(--c)*0.1)] font-black tabular-nums">{(ms / 1000).toFixed(1)}s</span>
+    </motion.div>
+  );
+}
+
 // ── Cartão de um oponente ───────────────────────────────────────────────────
 
 function OpponentTile({
   player,
+  color,
   mode,
   faceDown,
   winning,
@@ -589,6 +628,8 @@ function OpponentTile({
   register,
 }: {
   player: DobblePlayerView;
+  /** Cor do jogador (faixa na lateral do cartão). */
+  color: string;
   mode: "tower" | "well";
   faceDown: boolean;
   winning: boolean;
@@ -601,8 +642,18 @@ function OpponentTile({
     <motion.div
       ref={register}
       key={shakeKey}
-      className={`dobble-tile relative rounded-xl border bg-black/55 backdrop-blur ${shakeKey ? "dobble-shake" : ""} ${winning ? "dobble-pulse" : ""}`}
-      style={{ borderColor: winning ? "#facc15" : "rgba(255,255,255,0.12)", opacity: away ? 0.55 : 1 }}
+      className={`dobble-tile relative rounded-xl border bg-black/70 ${shakeKey ? "dobble-shake" : ""}`}
+      style={{
+        // longhands (não `borderColor`): misturar atalho e lado na mesma propriedade dá bug de estilo no React
+        borderTopColor: winning ? "#facc15" : "rgba(255,255,255,0.12)",
+        borderRightColor: winning ? "#facc15" : "rgba(255,255,255,0.12)",
+        borderBottomColor: winning ? "#facc15" : "rgba(255,255,255,0.12)",
+        borderLeftColor: color,
+        borderLeftWidth: 4,
+        boxShadow: winning ? "0 0 0 3px rgba(250,204,21,0.6)" : undefined,
+        opacity: away ? 0.55 : 1,
+        willChange: "transform",
+      }}
       animate={winning ? { scale: [1, 1.08, 1] } : { scale: 1 }}
       transition={{ duration: 0.5 }}
     >
@@ -620,6 +671,7 @@ function OpponentTile({
           </motion.span>
         </p>
       </div>
+      <AnimatePresence>{winning && <ScorePop mode={mode} />}</AnimatePresence>
       <AnimatePresence>
         {emojis.map((e) => (
           <motion.span
@@ -637,6 +689,42 @@ function OpponentTile({
   );
 }
 
+// ── Quem ganhou a rodada ────────────────────────────────────────────────────
+
+function RoundBanner({ name, avatarUrl, color, reactionMs }: { name: string; avatarUrl: string | null; color: string; reactionMs: number | null }) {
+  return (
+    <motion.div
+      className="pointer-events-none absolute -bottom-3 left-1/2 z-30 flex items-center gap-2 whitespace-nowrap rounded-full py-1 pl-1.5 pr-3.5 text-sm font-black text-black sm:text-xl"
+      style={{ x: "-50%", background: color, boxShadow: `0 0 0 3px rgba(0,0,0,0.4), 0 8px 24px ${color}99`, willChange: "transform, opacity" }}
+      initial={{ opacity: 0, y: 16, scale: 0.7 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      // Sai rápido (sem a mola da entrada): senão a faixa da rodada que acabou fica ~meio segundo na tela da rodada nova.
+      exit={{ opacity: 0, y: 8, transition: { duration: 0.12 } }}
+      transition={{ type: "spring", stiffness: 340, damping: 22 }}
+    >
+      <PlayerAvatar avatarUrl={avatarUrl} name={name} className="h-7 w-7 text-xs sm:h-9 sm:w-9" />
+      {name}!
+      {reactionMs != null && (
+        <span className="rounded-full bg-black/20 px-2 py-0.5 text-xs tabular-nums sm:text-base">⚡ {fmtSeconds(reactionMs)}</span>
+      )}
+    </motion.div>
+  );
+}
+
+/** "+1" (Torre: ganhou uma carta) / "−1" (Poço: falta uma a menos) subindo do cartão de quem ganhou. */
+function ScorePop({ mode }: { mode: "tower" | "well" }) {
+  return (
+    <motion.span
+      className="pointer-events-none absolute -top-2 right-1 z-50 text-lg font-black text-emerald-300 [text-shadow:0_2px_8px_rgba(0,0,0,0.9)]"
+      initial={{ y: 6, opacity: 0, scale: 0.6 }}
+      animate={{ y: -18, opacity: [0, 1, 1, 0], scale: 1.25 }}
+      transition={{ duration: 1.5, ease: "easeOut" }}
+    >
+      {mode === "tower" ? "+1" : "−1"}
+    </motion.span>
+  );
+}
+
 // ── A carta que voa (Torre: do centro pro vencedor; Poço: do vencedor pro centro) ──
 
 function FlyingCard({ flier }: { flier: Flier }) {
@@ -649,7 +737,7 @@ function FlyingCard({ flier }: { flier: Flier }) {
     <motion.div
       key={flier.key}
       className="pointer-events-none fixed z-[60]"
-      style={{ left: from.left, top: from.top, width: from.w, height: from.h }}
+      style={{ left: from.left, top: from.top, width: from.w, height: from.h, willChange: "transform, opacity" }}
       initial={{ x: 0, y: 0, scale: 1, rotate: 0, opacity: 1 }}
       animate={{ x: dx, y: dy, scale: Math.max(0.12, toD / fromD), rotate: 200, opacity: [1, 1, 1, 0.2] }}
       transition={{ duration: 0.6, ease: [0.4, 0, 0.2, 1] }}

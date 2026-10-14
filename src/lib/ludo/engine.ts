@@ -74,7 +74,19 @@ export interface LastMove {
   finished: boolean;
 }
 
-export interface Standing {
+/** Números da partida de cada jogador (só pra tela de fim de jogo — não mexem nas regras). */
+export interface LudoStats {
+  rolls: number;
+  sixes: number;
+  /** Peças adversárias que este jogador mandou de volta pra base. */
+  captures: number;
+  /** Peças deste jogador que foram mandadas de volta pra base. */
+  captured: number;
+}
+
+export const emptyStats = (): LudoStats => ({ rolls: 0, sixes: 0, captures: 0, captured: 0 });
+
+export interface Standing extends LudoStats {
   playerId: string;
   name: string;
   color: LudoColor;
@@ -102,6 +114,8 @@ export interface LudoState {
   standings: Standing[] | null;
   /** Sobe a cada partida iniciada — a UI usa pra zerar animações. */
   gameNumber: number;
+  /** Estatísticas por jogador (ausente em salas salvas antes deste campo existir). */
+  stats?: Record<string, LudoStats>;
 }
 
 export type Result = { ok: true; state: LudoState } | { ok: false; error: string };
@@ -263,6 +277,7 @@ export function startGame(state: LudoState, rng: () => number = Math.random): Re
     winnerId: null,
     standings: null,
     gameNumber: state.gameNumber + 1,
+    stats: {},
   });
 }
 
@@ -330,8 +345,10 @@ export function rollDice(state: LudoState, playerId: string, value: number): Res
 
   const sixStreak = value === 6 ? state.sixStreak + 1 : 0;
   const forfeit = sixStreak >= 3;
+  const mine = state.stats?.[playerId] ?? emptyStats();
   return ok({
     ...state,
+    stats: { ...state.stats, [playerId]: { ...mine, rolls: mine.rolls + 1, sixes: mine.sixes + (value === 6 ? 1 : 0) } },
     phase: "moving",
     dice: value,
     sixStreak,
@@ -360,9 +377,11 @@ function capturesAt(players: LudoPlayer[], mover: LudoPlayer, to: number): Captu
   return captures;
 }
 
-export function buildStandings(players: LudoPlayer[]): Standing[] {
+export function buildStandings(players: LudoPlayer[], stats: Record<string, LudoStats> = {}): Standing[] {
   return players
     .map((p) => ({
+      ...emptyStats(),
+      ...stats[p.id],
       playerId: p.id,
       name: p.name,
       color: p.color,
@@ -405,7 +424,17 @@ export function movePiece(state: LudoState, playerId: string, piece: number): Re
     captures,
     finished,
   };
-  const base = { ...state, players, moveSeq: state.moveSeq + 1, lastMove, dice: null, forfeit: false };
+  // Capturas contam pra quem capturou e pra quem perdeu a peça.
+  const stats: Record<string, LudoStats> = { ...state.stats };
+  if (captures.length > 0) {
+    const mine = stats[mover.id] ?? emptyStats();
+    stats[mover.id] = { ...mine, captures: mine.captures + captures.length };
+    for (const c of captures) {
+      const theirs = stats[c.playerId] ?? emptyStats();
+      stats[c.playerId] = { ...theirs, captured: theirs.captured + 1 };
+    }
+  }
+  const base = { ...state, players, stats, moveSeq: state.moveSeq + 1, lastMove, dice: null, forfeit: false };
 
   const moverNow = players.find((p) => p.id === mover.id)!;
   if (moverNow.pieces.every((x) => x === FINISHED)) {
@@ -413,7 +442,7 @@ export function movePiece(state: LudoState, playerId: string, piece: number): Re
       ...base,
       phase: "game_over",
       winnerId: mover.id,
-      standings: buildStandings(players),
+      standings: buildStandings(players, stats),
       extraTurn: null,
     });
   }

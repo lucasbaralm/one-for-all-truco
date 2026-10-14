@@ -1,4 +1,4 @@
-// Formato das mensagens trocadas com o room server do PartyKit
+// Formato das mensagens trocadas com o room server
 // (party/server.ts). Compartilhado entre cliente e servidor pra não
 // desalinhar os dois lados.
 import { Card } from './rules';

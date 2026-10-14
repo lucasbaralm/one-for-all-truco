@@ -47,6 +47,8 @@ export interface Claim {
   round: number;
   playerId: string;
   symbol: number;
+  /** Quanto tempo a rodada levou pra ser ganha (relógio do servidor); null se não dá pra saber. */
+  reactionMs: number | null;
   /** As duas cartas no momento do acerto (o estado só troca elas ao avançar). */
   centerCard: number;
   handCard: number;
@@ -58,7 +60,19 @@ export interface Wrong {
   symbol: number;
 }
 
-export interface Standing {
+/** Números da partida de cada jogador (só pra tela de fim de jogo — não mexem nas regras). */
+export interface DobbleStats {
+  /** Rodadas ganhas. */
+  won: number;
+  /** Cliques num símbolo errado. */
+  wrong: number;
+  /** Melhor tempo (ms) entre as rodadas que ganhou. */
+  fastestMs: number | null;
+}
+
+export const emptyStats = (): DobbleStats => ({ won: 0, wrong: 0, fastestMs: null });
+
+export interface Standing extends DobbleStats {
   playerId: string;
   name: string;
   /** Torre: cartas na pilha. Poço: cartas que ainda faltavam jogar. */
@@ -84,6 +98,10 @@ export interface DobbleState {
   standings: Standing[] | null;
   /** Sobe a cada partida — a UI usa pra zerar animações. */
   gameNumber: number;
+  /** Quando (relógio do servidor) a rodada atual abriu — base do tempo de reação. */
+  roundStartedAt?: number;
+  /** Estatísticas por jogador (ausente em salas salvas antes deste campo existir). */
+  stats?: Record<string, DobbleStats>;
 }
 
 export type Result = { ok: true; state: DobbleState } | { ok: false; error: string };
@@ -224,17 +242,19 @@ export function startGame(state: DobbleState, rng: () => number = Math.random): 
     winnerId: null,
     standings: null,
     gameNumber: state.gameNumber + 1,
+    roundStartedAt: 0,
+    stats: {},
   });
 }
 
-/** Fim da contagem: vira as cartas e abre a primeira rodada. */
-export function beginPlay(state: DobbleState): Result {
+/** Fim da contagem: vira as cartas e abre a primeira rodada (`now`: relógio do servidor, pro tempo de reação). */
+export function beginPlay(state: DobbleState, now = 0): Result {
   if (state.phase !== "countdown") return fail("not_countdown");
   const players =
     state.mode === "well"
       ? state.players.map((p) => ({ ...p, hand: p.pile[0] ?? null, pile: p.pile.slice(1) }))
       : state.players;
-  return ok({ ...state, phase: "playing", players, round: 1 });
+  return ok({ ...state, phase: "playing", players, round: 1, roundStartedAt: now });
 }
 
 /** Volta pro lobby depois da partida, mantendo modo, bots e quem segue conectado. */
@@ -284,13 +304,18 @@ export function claim(state: DobbleState, playerId: string, symbol: number, roun
   if ((state.lockedUntil[playerId] ?? 0) > now) return fail("locked");
   if (player.hand === null || state.center === null) return fail("no_card");
 
+  const mine = state.stats?.[playerId] ?? emptyStats();
+
   if (cardHasSymbol(player.hand, symbol) && cardHasSymbol(state.center, symbol)) {
     const seq = state.claimSeq + 1;
+    const reactionMs = state.roundStartedAt ? Math.max(0, now - state.roundStartedAt) : null;
+    const fastestMs = reactionMs === null ? mine.fastestMs : mine.fastestMs === null ? reactionMs : Math.min(mine.fastestMs, reactionMs);
     return ok({
       ...state,
       phase: "round_end",
       claimSeq: seq,
-      lastClaim: { seq, round, playerId, symbol, centerCard: state.center, handCard: player.hand },
+      lastClaim: { seq, round, playerId, symbol, reactionMs, centerCard: state.center, handCard: player.hand },
+      stats: { ...state.stats, [playerId]: { ...mine, won: mine.won + 1, fastestMs } },
       players: state.mode === "tower" ? state.players.map((p) => (p.id === playerId ? { ...p, stack: p.stack + 1 } : p)) : state.players,
     });
   }
@@ -300,13 +325,14 @@ export function claim(state: DobbleState, playerId: string, symbol: number, roun
     ...state,
     wrongSeq: seq,
     lastWrong: { seq, playerId, symbol },
+    stats: { ...state.stats, [playerId]: { ...mine, wrong: mine.wrong + 1 } },
     lockedUntil: { ...state.lockedUntil, [playerId]: now + LOCK_MS },
   });
 }
 
 function buildStandings(state: DobbleState, winnerId: string): Standing[] {
   return state.players
-    .map((p) => ({ playerId: p.id, name: p.name, cards: cardsOf(state, p) }))
+    .map((p) => ({ ...emptyStats(), ...state.stats?.[p.id], playerId: p.id, name: p.name, cards: cardsOf(state, p) }))
     .sort((a, b) => {
       if (a.playerId === winnerId) return -1;
       if (b.playerId === winnerId) return 1;
@@ -316,7 +342,7 @@ function buildStandings(state: DobbleState, winnerId: string): Standing[] {
 }
 
 /** Passa da rodada ganha (parada na mesa) pra próxima — ou pro fim do jogo. */
-export function advanceRound(state: DobbleState): Result {
+export function advanceRound(state: DobbleState, now = 0): Result {
   if (state.phase !== "round_end" || !state.lastClaim) return fail("not_round_end");
   const { playerId: winnerId, centerCard, handCard } = state.lastClaim;
   const base = { ...state, lockedUntil: {} };
@@ -331,7 +357,7 @@ export function advanceRound(state: DobbleState): Result {
       return ok({ ...done, phase: "game_over", winnerId: top.id, standings: buildStandings(done, top.id) });
     }
     const draw = state.draw.slice(0, -1);
-    return ok({ ...base, players, draw, center: state.draw[state.draw.length - 1], phase: "playing", round: state.round + 1 });
+    return ok({ ...base, players, draw, center: state.draw[state.draw.length - 1], phase: "playing", round: state.round + 1, roundStartedAt: now });
   }
 
   // Poço: o vencedor joga a carta dele no centro e vira a próxima do monte.
@@ -343,7 +369,7 @@ export function advanceRound(state: DobbleState): Result {
     const done = { ...base, players, center: handCard };
     return ok({ ...done, phase: "game_over", winnerId, standings: buildStandings(done, winnerId) });
   }
-  return ok({ ...base, players, center: handCard, phase: "playing", round: state.round + 1 });
+  return ok({ ...base, players, center: handCard, phase: "playing", round: state.round + 1, roundStartedAt: now });
 }
 
 // ── O que os clientes enxergam ─────────────────────────────────────────────

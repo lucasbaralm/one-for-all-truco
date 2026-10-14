@@ -12,7 +12,7 @@ export type { FloatingEmoji };
 // Uma "sessão" de Ludo é tudo que a tela precisa: o estado da sala, quem sou
 // eu e como mandar ações. Toda partida — inclusive "eu contra bots" — roda no
 // room server (party/ludo.ts): o servidor rola o dado e joga pelos bots, e se
-// o PartyKit estiver fora do ar a sala simplesmente não conecta (a tela avisa).
+// o servidor de jogo estiver fora do ar a sala simplesmente não conecta (a tela avisa).
 
 export interface LudoSession {
   state: LudoState | null;

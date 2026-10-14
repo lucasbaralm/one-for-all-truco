@@ -107,6 +107,16 @@ class CounterRoom extends GameRoom<CounterState> {
   }
 }
 
+// Jogo com informação secreta por jogador (a mão no Uno): cada um recebe uma mensagem SUA.
+class SecretRoom extends CounterRoom {
+  protected perViewer() {
+    return true;
+  }
+  protected stateMessage(state: CounterState, viewer?: string | null) {
+    return JSON.stringify({ type: "state", state, viewer });
+  }
+}
+
 let history: { room_id: string; winner_name: string; players_summary: unknown[] }[] = [];
 
 beforeEach(() => {
@@ -358,5 +368,61 @@ describe("persistência e histórico", () => {
     await restarted.say(carol, { type: "join", name: "Carol" }); // outra mudança de estado
     await new Promise((r) => setTimeout(r, 10));
     expect(history).toHaveLength(0);
+  });
+});
+
+describe("visão por jogador (perViewer)", () => {
+  const seen = (c: FakeConn) => c.sent.filter((m) => m.type === "state").map((m) => (m as unknown as { viewer: string | null }).viewer);
+
+  it("jogos comuns mandam a MESMA mensagem pra todos (viewer null)", async () => {
+    const h = setup();
+    const alice = await h.connect("Alice");
+    const bob = await h.connect("Bob");
+    await h.say(alice, { type: "join", name: "Alice" });
+    await h.say(bob, { type: "join", name: "Bob" });
+    expect(seen(alice).every((v) => v === undefined)).toBe(true); // a mensagem padrão nem tem o campo
+    expect(stateOf(alice)).toEqual(stateOf(bob));
+  });
+
+  it("com perViewer, cada conexão recebe a mensagem feita pra identidade DELA — ao conectar e a cada mudança", async () => {
+    const h = makeHarness(SecretRoom);
+    const alice = await h.connect("Alice");
+    const bob = await h.connect("Bob");
+    expect(seen(alice)).toEqual(["Alice"]);
+    expect(seen(bob)).toEqual(["Bob"]);
+    await h.say(alice, { type: "join", name: "Alice" });
+    await h.say(bob, { type: "join", name: "Bob" });
+    expect(seen(alice).every((v) => v === "Alice")).toBe(true);
+    expect(seen(bob).every((v) => v === "Bob")).toBe(true);
+    // e cada mudança chega pros dois, cada um na sua versão
+    const before = [seen(alice).length, seen(bob).length];
+    await h.say(alice, { type: "start" });
+    expect(seen(alice).length).toBe(before[0] + 1);
+    expect(seen(bob).length).toBe(before[1] + 1);
+    expect(seen(alice).at(-1)).toBe("Alice");
+    expect(seen(bob).at(-1)).toBe("Bob");
+  });
+
+  it("duas abas do mesmo jogador recebem a visão dele; conexão recusada não recebe nada", async () => {
+    const h = makeHarness(SecretRoom);
+    const a1 = await h.connect("Alice");
+    const a2 = await h.connect("Alice");
+    const mallory = await h.connect("Mallory", "user:Alice");
+    await h.say(a1, { type: "join", name: "Alice" });
+    expect(seen(a1).at(-1)).toBe("Alice");
+    expect(seen(a2).at(-1)).toBe("Alice");
+    expect(mallory.closed).toEqual([[4001, "unauthorized"]]);
+    expect(mallory.sent).toEqual([]);
+  });
+
+  it("espectador (conectado, sem assento) recebe a visão com a identidade dele — o jogo decide que não tem mão", async () => {
+    const h = makeHarness(SecretRoom);
+    const alice = await h.connect("Alice");
+    await h.say(alice, { type: "join", name: "Alice" });
+    await h.say(alice, { type: "start" });
+    const carol = await h.connect("Carol");
+    expect(seen(carol)).toEqual(["Carol"]);
+    await h.say(alice, { type: "inc" });
+    expect(seen(carol).at(-1)).toBe("Carol");
   });
 });

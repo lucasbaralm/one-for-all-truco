@@ -1,0 +1,28 @@
+{
+  // Worker dos room servers (PartyServer em cima de Durable Objects). Dev: `npm run party:dev`
+  // (porta 1999, a mesma de antes); deploy: `npm run party:deploy`.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fodinha-party",
+  "main": "worker/index.ts",
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Um binding por jogo. O NOME do binding vira o segmento da URL (/parties/ludo/<sala>),
+  // então não renomeie sem trocar o `party:` no cliente.
+  "durable_objects": {
+    "bindings": [
+      { "name": "Main", "class_name": "Main" },
+      { "name": "Ludo", "class_name": "Ludo" },
+      { "name": "Dobble", "class_name": "Dobble" },
+      { "name": "Uno", "class_name": "Uno" },
+      { "name": "Forca", "class_name": "Forca" }
+    ]
+  },
+  // Cada classe nova entra numa migração nova (v2, v3...) — nunca edite a v1 depois do deploy.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Main", "Ludo", "Dobble", "Uno", "Forca"] }],
+
+  // SUPABASE_URL e SUPABASE_ANON_KEY NÃO ficam aqui:
+  //   • local: arquivo .dev.vars (modelo em .dev.vars.example);
+  //   • produção: `npx wrangler secret put SUPABASE_URL` e `... SUPABASE_ANON_KEY`.
+  "observability": { "enabled": true }
+}

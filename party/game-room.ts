@@ -1,4 +1,4 @@
-import type * as Party from "partykit/server";
+import type { Conn, ConnContext, RoomHandler, RoomPort } from "./room-types";
 import {
   AUTH_UNAVAILABLE_CLOSE_CODE,
   KICKED_CLOSE_CODE,
@@ -45,7 +45,7 @@ const AUTH_TIMEOUT_MS = 3000;
 type AuthResult = { username: string } | { error: "invalid" | "unavailable" };
 type ConnState = { username?: string };
 
-export abstract class GameRoom<S> implements Party.Server {
+export abstract class GameRoom<S> implements RoomHandler {
   protected controller: RoomController<S>;
   private wasOver = false;
   // Verificação de identidade em andamento por conexão: mensagens que chegam
@@ -54,7 +54,7 @@ export abstract class GameRoom<S> implements Party.Server {
   private pendingAuth = new Map<string, Promise<string | null>>();
   private graceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  constructor(readonly room: Party.Room) {
+  constructor(readonly room: RoomPort) {
     this.controller = this.createController({
       onChange: (state) => this.handleChange(state),
       onKick: (playerId) => this.closeConnectionsOf(playerId),
@@ -67,8 +67,19 @@ export abstract class GameRoom<S> implements Party.Server {
   protected abstract createController(hooks: ControllerHooks<S>): RoomController<S>;
   /** Reações aceitas e repassadas pra sala. */
   protected abstract emojis(): readonly string[];
-  /** JSON da mensagem "state" que vai pros clientes. */
-  protected abstract stateMessage(state: S): string;
+  /**
+   * JSON da mensagem "state" que vai pros clientes. `viewer` é a identidade verificada de quem vai
+   * receber (null = mensagem pra todos); só importa pros jogos com informação secreta por jogador
+   * (a mão no Uno) — ver `perViewer()`. Os outros ignoram o segundo parâmetro.
+   */
+  protected abstract stateMessage(state: S, viewer: string | null): string;
+  /**
+   * true = cada jogador recebe uma mensagem DIFERENTE (a própria mão, por exemplo) em vez de todos
+   * receberem a mesma. Os outros jogos (tudo que está na mesa é público) deixam false.
+   */
+  protected perViewer(): boolean {
+    return false;
+  }
   protected abstract isLobby(state: S): boolean;
   protected abstract isGameOver(state: S): boolean;
   /** O jogador da sala com esse id (null = não é jogador). */
@@ -94,7 +105,7 @@ export abstract class GameRoom<S> implements Party.Server {
 
   // ── Ciclo de vida das conexões ───────────────────────────────────────────
 
-  async onConnect(connection: Party.Connection, ctx: Party.ConnectionContext) {
+  async onConnect(connection: Conn, ctx: ConnContext) {
     const url = new URL(ctx.request.url);
     const auth = this.verify(url.searchParams.get("token"), url.searchParams.get("playerId"));
     this.pendingAuth.set(
@@ -108,7 +119,7 @@ export abstract class GameRoom<S> implements Party.Server {
       return;
     }
     connection.setState({ username: result.username } satisfies ConnState);
-    connection.send(this.stateMessage(this.controller.state));
+    connection.send(this.stateMessage(this.controller.state, result.username));
   }
 
   // Verifica o token do Supabase contra a própria API de auth (evita guardar o
@@ -137,7 +148,7 @@ export abstract class GameRoom<S> implements Party.Server {
     }
   }
 
-  private async identity(connection: Party.Connection): Promise<string | null> {
+  private async identity(connection: Conn): Promise<string | null> {
     const known = (connection.state as ConnState | null)?.username;
     if (known) return known;
     return (await this.pendingAuth.get(connection.id)) ?? null;
@@ -163,7 +174,7 @@ export abstract class GameRoom<S> implements Party.Server {
     }
   }
 
-  private dropped(connection: Party.Connection) {
+  private dropped(connection: Conn) {
     this.pendingAuth.delete(connection.id);
     const username = (connection.state as ConnState | null)?.username;
     if (!username) return;
@@ -190,17 +201,17 @@ export abstract class GameRoom<S> implements Party.Server {
     if (!this.anyConnection(connection.id)) this.controller.setPaused(true);
   }
 
-  onClose(connection: Party.Connection) {
+  onClose(connection: Conn) {
     this.dropped(connection);
   }
 
-  onError(connection: Party.Connection) {
+  onError(connection: Conn) {
     this.dropped(connection);
   }
 
   // ── Mensagens ────────────────────────────────────────────────────────────
 
-  async onMessage(raw: string | ArrayBuffer | ArrayBufferView, sender: Party.Connection) {
+  async onMessage(raw: string | ArrayBuffer | ArrayBufferView, sender: Conn) {
     if (typeof raw !== "string") return;
     let message: { type?: unknown; [k: string]: unknown };
     try {
@@ -241,7 +252,15 @@ export abstract class GameRoom<S> implements Party.Server {
   // ── Estado ───────────────────────────────────────────────────────────────
 
   private handleChange(state: S) {
-    this.room.broadcast(this.stateMessage(state));
+    if (this.perViewer()) {
+      // Cada um recebe a SUA visão. Conexão que ainda não terminou de autenticar fica de fora: o onConnect dela manda o estado.
+      for (const c of this.room.getConnections<ConnState>()) {
+        const who = c.state?.username;
+        if (who) c.send(this.stateMessage(state, who));
+      }
+    } else {
+      this.room.broadcast(this.stateMessage(state, null));
+    }
     void this.room.storage.put(STATE_KEY, state);
     const over = this.isGameOver(state);
     if (over && !this.wasOver) void this.saveMatchHistory(state);

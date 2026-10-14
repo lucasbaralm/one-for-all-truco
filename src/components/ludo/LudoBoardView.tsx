@@ -1,7 +1,7 @@
 "use client";
 
-import { memo, useMemo, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { memo, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion, useAnimationControls } from "framer-motion";
 import {
   BASE_ORIGIN,
   BOARD_SIZE,
@@ -20,6 +20,7 @@ import {
 } from "@/lib/ludo/board";
 import type { LudoMove, LudoPlayer } from "@/lib/ludo/engine";
 import { TIMING } from "@/lib/ludo/timing";
+import { toSvgPoints, trailPoints } from "@/lib/ludo/trail";
 import { LUDO_COLORS } from "./colors";
 import { AnimatedView, BoardEffect, MotionKind, pieceKey } from "./useLudoAnimator";
 
@@ -280,6 +281,25 @@ export function LudoBoardView({ view, players, rotation, activeColor, moves, myC
   const canPick = moves.length > 0 && !view.busy && myColor !== null;
   const movable = useMemo(() => new Set(canPick ? moves.map((m) => m.piece) : []), [canPick, moves]);
 
+  // Captura: o tabuleiro dá uma sacudida curta (o resto do impacto — estouro, som, peça voltando — vem dos efeitos).
+  const shake = useAnimationControls();
+  const captureId = view.effects.find((e) => e.kind === "capture")?.id ?? 0;
+  useEffect(() => {
+    if (captureId) void shake.start({ x: [0, -5, 5, -3, 3, 0], transition: { duration: 0.35 } });
+  }, [captureId, shake]);
+
+  // Rastro da última jogada (casas percorridas) e prévia do caminho da peça sob o mouse.
+  const toView = (p: { x: number; y: number }) => rotatePoint(p.x, p.y, rotation);
+  const trail = view.trail && view.trail.points.length > 1 ? view.trail : null;
+  const trailLine = trail ? toSvgPoints(trail.points, toView) : null;
+  const trailStart = trail ? toView(trail.points[0]) : null;
+  const trailEnd = trail ? toView(trail.points[trail.points.length - 1]) : null;
+  const previewLine = useMemo(() => {
+    if (hovered === null || !canPick || !myColor) return null;
+    const m = moves.find((x) => x.piece === hovered);
+    return m ? toSvgPoints(trailPoints(myColor, m.piece, m.from, m.to), (p) => rotatePoint(p.x, p.y, rotation)) : null;
+  }, [hovered, canPick, myColor, moves, rotation]);
+
   const pieces = useMemo<RenderPiece[]>(() => {
     // Primeiro agrupa por casa pra saber quantas dividem cada uma.
     const byCell = new Map<string, { playerId: string; color: LudoColor; piece: number; progress: number }[]>();
@@ -333,10 +353,74 @@ export function LudoBoardView({ view, players, rotation, activeColor, moves, myC
   }, [canPick, moves, myColor, rotation]);
 
   return (
-    <div className="relative h-full w-full select-none overflow-hidden rounded-[3.2%] shadow-[0_18px_50px_rgba(0,0,0,0.55)] ring-4 ring-white/15">
+    <motion.div
+      animate={shake}
+      className="relative h-full w-full select-none overflow-hidden rounded-[3.2%] shadow-[0_18px_50px_rgba(0,0,0,0.55)] ring-4 ring-white/15"
+    >
       <BoardArt rotation={rotation} activeColor={activeColor} />
 
-      {/* destinos possíveis */}
+      {/* rastro da última jogada: desenha o caminho, segura um pouco e apaga */}
+      {trail && trailLine && trailStart && trailEnd && (
+        <svg key={trail.id} viewBox={`0 0 ${BOARD_SIZE} ${BOARD_SIZE}`} className="pointer-events-none absolute inset-0 h-full w-full" style={{ zIndex: 8 }} aria-hidden>
+          {[
+            { stroke: "#ffffff", width: 0.44, opacity: 0.5 },
+            { stroke: LUDO_COLORS[trail.color].main, width: 0.26, opacity: 0.95 },
+          ].map((line) => (
+            <motion.polyline
+              key={line.stroke}
+              points={trailLine}
+              fill="none"
+              stroke={line.stroke}
+              strokeWidth={line.width}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              initial={{ pathLength: 0, opacity: line.opacity }}
+              animate={{ pathLength: 1, opacity: 0 }}
+              transition={{ pathLength: { duration: trail.drawMs / 1000, ease: "linear" }, opacity: { delay: 1.4, duration: 1 } }}
+            />
+          ))}
+          <motion.circle
+            cx={trailStart.x}
+            cy={trailStart.y}
+            r="0.22"
+            fill="none"
+            stroke={LUDO_COLORS[trail.color].dark}
+            strokeWidth="0.1"
+            initial={{ opacity: 0.9 }}
+            animate={{ opacity: 0 }}
+            transition={{ delay: 1.4, duration: 1 }}
+          />
+          <motion.circle
+            cx={trailEnd.x}
+            cy={trailEnd.y}
+            r="0.2"
+            fill={LUDO_COLORS[trail.color].main}
+            stroke="#fff"
+            strokeWidth="0.07"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: [0, 1, 1, 0] }}
+            transition={{ duration: 2.4, times: [0, 0.2, 0.58, 1], delay: trail.drawMs / 1000 - 0.1 }}
+          />
+        </svg>
+      )}
+
+      {/* prévia do caminho da peça sob o mouse */}
+      {previewLine && myColor && (
+        <svg viewBox={`0 0 ${BOARD_SIZE} ${BOARD_SIZE}`} className="pointer-events-none absolute inset-0 h-full w-full" style={{ zIndex: 6 }} aria-hidden>
+          <polyline
+            points={previewLine}
+            fill="none"
+            stroke={LUDO_COLORS[myColor].dark}
+            strokeWidth="0.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray="0.02 0.3"
+            opacity="0.9"
+          />
+        </svg>
+      )}
+
+      {/* destinos possíveis: casa marcada + a peça "fantasma" que ficaria ali */}
       {markers.map((m) => (
         <div
           key={`m${m.piece}`}
@@ -351,6 +435,13 @@ export function LudoBoardView({ view, players, rotation, activeColor, moves, myC
               transform: hovered === m.piece ? "scale(1.15)" : undefined,
             }}
           />
+          <div
+            data-ghost="true"
+            className="absolute inset-0"
+            style={{ opacity: hovered === m.piece ? 0.85 : 0.5, transform: `scale(${hovered === m.piece ? 0.95 : 0.72})`, transition: "transform .15s, opacity .15s" }}
+          >
+            <Pawn color={myColor!} selectable={false} />
+          </div>
         </div>
       ))}
 
@@ -363,8 +454,15 @@ export function LudoBoardView({ view, players, rotation, activeColor, moves, myC
           return (
             <motion.div
               key={p.key}
-              className="absolute left-0 top-0"
-              style={{ width: `${CELL_PCT}%`, height: `${CELL_PCT}%`, zIndex: isHop || returning ? 40 : 10 + Math.round(p.y) }}
+              // pointer-events-none: o peão em si não recebe mouse — só o botão da peça que posso mover (pointer-events-auto).
+              // Sem isso, um peão adversário na MESMA casa ficava por cima e engolia o hover e o clique da minha peça.
+              className="pointer-events-none absolute left-0 top-0"
+              style={{
+                width: `${CELL_PCT}%`,
+                height: `${CELL_PCT}%`,
+                // peça que posso mover fica acima das outras da casa (abaixo só da que está pulando/voltando)
+                zIndex: isHop || returning ? 40 : selectable ? 35 : 10 + Math.round(p.y),
+              }}
               initial={false}
               animate={{ x: `${(p.x - 0.5) * 100}%`, y: `${(p.y - 0.5) * 100}%` }}
               transition={transitionFor(kind)}
@@ -435,6 +533,6 @@ export function LudoBoardView({ view, players, rotation, activeColor, moves, myC
           <EffectView key={e.id} effect={e} rotation={rotation} />
         ))}
       </AnimatePresence>
-    </div>
+    </motion.div>
   );
 }

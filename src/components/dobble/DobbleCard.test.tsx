@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ALL_CARDS, SYMBOLS } from "@/lib/dobble/cards";
-import { DobbleCard } from "./DobbleCard";
+import { DobbleCard, GLYPH_FULL_SIZE } from "./DobbleCard";
 
 // A carta é a peça central do Dobble: tem que mostrar os símbolos certos e só
 // ser clicável quando o jogador pode jogar. Renderizada no servidor (sem DOM).
@@ -54,6 +54,31 @@ describe("DobbleCard", () => {
     expect(render({ wrong: second })).toContain("ring-red-500");
     // símbolo que não está na carta não destaca nada
     expect(render({ highlight: 9999 })).not.toContain("ring-yellow-400");
+  });
+
+  // Desempenho: cada font-size diferente obriga o navegador a montar uma fonte nova e refazer o layout
+  // do texto. Com 8 emojis de tamanhos sorteados por carta, isso virava travadinhas de 40–80ms por rodada.
+  it("todos os símbolos de uma carta usam o MESMO font-size (o tamanho variado vem de scale)", () => {
+    for (let card = 0; card < ALL_CARDS.length; card++) {
+      const html = render({ card });
+      const sizes = new Set([...html.matchAll(/font-size:([^;"]+)/g)].map((m) => m[1]));
+      expect(sizes.size, `carta ${card}`).toBe(1);
+    }
+    // e é o mesmo entre cartas diferentes (o navegador reaproveita a fonte de uma carta pra outra)
+    const a = [...render({ card: 3 }).matchAll(/font-size:([^;"]+)/g)][0][1];
+    const b = [...render({ card: 40 }).matchAll(/font-size:([^;"]+)/g)][0][1];
+    expect(a).toBe(b);
+  });
+
+  it("o tamanho de cada símbolo varia por scale() e nunca amplia (ampliar embaçaria o emoji)", () => {
+    const scales: number[] = [];
+    for (let card = 0; card < ALL_CARDS.length; card++) {
+      for (const m of render({ card }).matchAll(/scale\(([\d.]+)\)/g)) scales.push(Number(m[1]));
+    }
+    expect(scales).toHaveLength(ALL_CARDS.length * 8);
+    expect(Math.max(...scales)).toBeLessThanOrEqual(1);
+    expect(Math.max(...scales) / Math.min(...scales)).toBeGreaterThan(1.3); // continua variando de verdade
+    expect(GLYPH_FULL_SIZE).toBeGreaterThan(0);
   });
 
   it("usa o tamanho pedido (as cartas do jogo usam variáveis CSS do layout)", () => {

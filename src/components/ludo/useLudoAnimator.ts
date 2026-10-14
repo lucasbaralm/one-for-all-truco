@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FINISHED, IN_BASE, LudoColor, pieceCenter } from "@/lib/ludo/board";
 import type { LudoState } from "@/lib/ludo/engine";
-import { TIMING } from "@/lib/ludo/timing";
+import { TIMING, moveAnimationMs } from "@/lib/ludo/timing";
+import { TrailPoint, trailPoints } from "@/lib/ludo/trail";
 import { sfx } from "./sfx";
 
 // O servidor manda estados "de uma vez" (o dado já rolado, a peça já na casa
@@ -23,6 +24,19 @@ export interface BoardEffect {
   color: LudoColor;
 }
 
+/** Rastro da última jogada: o caminho percorrido, desenhado e depois apagado devagar. */
+export interface BoardTrail {
+  id: number;
+  color: LudoColor;
+  /** Centros das casas, no tabuleiro "canônico" (antes de girar pra exibição). */
+  points: TrailPoint[];
+  /** Quanto tempo o traço leva pra ser desenhado (acompanha a peça andando). */
+  drawMs: number;
+}
+
+/** Depois de desenhado, o rastro fica visível por esse tempo antes de sumir. */
+export const TRAIL_LINGER_MS = 2400;
+
 export interface AnimatedView {
   /** Último estado já "mostrado" (turno, fase, jogadas legais...). */
   state: LudoState | null;
@@ -38,6 +52,7 @@ export interface AnimatedView {
   /** Tem animação rolando: nada de clique no dado/peças nesse meio tempo. */
   busy: boolean;
   effects: BoardEffect[];
+  trail: BoardTrail | null;
 }
 
 export const pieceKey = (playerId: string, piece: number) => `${playerId}:${piece}`;
@@ -77,6 +92,7 @@ export function snapshot(state: LudoState | null): AnimatedView {
     diceKey: state?.rollSeq ?? 0,
     busy: false,
     effects: [],
+    trail: null,
   };
 }
 
@@ -84,6 +100,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 let effectSeq = 0;
 let hopSeq = 0;
+let trailSeq = 0;
 
 export function useLudoAnimator(incoming: LudoState | null): AnimatedView {
   const [view, setViewState] = useState<AnimatedView>(() => snapshot(incoming));
@@ -103,8 +120,8 @@ export function useLudoAnimator(incoming: LudoState | null): AnimatedView {
   const show = useCallback(
     (state: LudoState) => {
       shownRef.current = state;
-      // Efeitos em andamento (explosões) sobrevivem ao snapshot: eles se apagam sozinhos.
-      setView((v) => ({ ...snapshot(state), effects: v.effects }));
+      // Efeitos em andamento (explosões) e o rastro sobrevivem ao snapshot: eles se apagam sozinhos.
+      setView((v) => ({ ...snapshot(state), effects: v.effects, trail: v.trail }));
     },
     [setView]
   );
@@ -116,6 +133,17 @@ export function useLudoAnimator(incoming: LudoState | null): AnimatedView {
       setTimeout(() => {
         if (aliveRef.current) setView((v) => ({ ...v, effects: v.effects.filter((e) => e.id !== id) }));
       }, ms);
+    },
+    [setView]
+  );
+
+  const addTrail = useCallback(
+    (trail: Omit<BoardTrail, "id">) => {
+      const id = ++trailSeq;
+      setView((v) => ({ ...v, trail: { ...trail, id } }));
+      setTimeout(() => {
+        if (aliveRef.current) setView((v) => (v.trail?.id === id ? { ...v, trail: null } : v));
+      }, trail.drawMs + TRAIL_LINGER_MS);
     },
     [setView]
   );
@@ -162,6 +190,11 @@ export function useLudoAnimator(incoming: LudoState | null): AnimatedView {
         }));
 
       setView((v) => ({ ...v, busy: true }));
+      addTrail({
+        color: mover.color,
+        points: trailPoints(mover.color, lm.piece, lm.from, lm.to),
+        drawMs: Math.max(250, moveAnimationMs({ ...lm, captures: [], finished: false })),
+      });
 
       if (lm.from === IN_BASE) {
         sfx.exitBase();
@@ -201,7 +234,7 @@ export function useLudoAnimator(incoming: LudoState | null): AnimatedView {
       if (!aliveRef.current) return;
       show(next);
     },
-    [addEffect, setView, show]
+    [addEffect, addTrail, setView, show]
   );
 
   const transition = useCallback(

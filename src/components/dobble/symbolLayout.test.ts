@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ALL_CARDS } from "@/lib/dobble/cards";
+import { GLYPH_FULL_SIZE } from "./DobbleCard";
 import { layoutCard } from "./symbolLayout";
 
 // O desenho de cada carta (posição, tamanho e giro dos 8 símbolos) é sorteado a
@@ -46,6 +47,12 @@ describe("layoutCard", () => {
           expect(dist, `carta ${card}: símbolos ${i} e ${j}`).toBeGreaterThanOrEqual(needed);
         }
       }
+    }
+  });
+
+  it("nenhum símbolo é maior que o tamanho cheio da fonte (a carta só reduz com scale, nunca amplia)", () => {
+    for (let card = 0; card < ALL_CARDS.length; card++) {
+      for (const s of layoutCard(card)) expect(s.size, `carta ${card}`).toBeLessThanOrEqual(GLYPH_FULL_SIZE);
     }
   });
 

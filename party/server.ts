@@ -1,4 +1,4 @@
-import type * as Party from "partykit/server";
+import type { Conn, ConnContext, RoomHandler, RoomPort } from "./room-types";
 import {
   GameState,
   PlayerState,
@@ -30,10 +30,10 @@ const BOT_MAX_DELAY_MS = 1200;
 
 type Env = { SUPABASE_URL: string; SUPABASE_ANON_KEY: string };
 
-export default class FodinhaRoom implements Party.Server {
+export default class FodinhaRoom implements RoomHandler {
   state: GameState | null = null;
 
-  constructor(readonly room: Party.Room) {}
+  constructor(readonly room: RoomPort) {}
 
   private get env(): Env {
     return this.room.env as unknown as Env;
@@ -57,7 +57,7 @@ export default class FodinhaRoom implements Party.Server {
   // Verifica o token de acesso do Supabase contra a própria API de auth do
   // Supabase (evita precisar guardar o JWT secret aqui) e confirma que o
   // playerId reivindicado bate com o usuário autenticado de verdade.
-  async onConnect(connection: Party.Connection, ctx: Party.ConnectionContext) {
+  async onConnect(connection: Conn, ctx: ConnContext) {
     const url = new URL(ctx.request.url);
     const token = url.searchParams.get("token");
     const claimedName = url.searchParams.get("playerId");
@@ -93,7 +93,7 @@ export default class FodinhaRoom implements Party.Server {
     }
   }
 
-  private verifiedName(sender: Party.Connection): string | null {
+  private verifiedName(sender: Conn): string | null {
     const s = sender.state as { username?: string } | null;
     return s?.username ?? null;
   }
@@ -314,7 +314,7 @@ export default class FodinhaRoom implements Party.Server {
     }
   }
 
-  async onMessage(raw: string | ArrayBuffer | ArrayBufferView, sender: Party.Connection) {
+  async onMessage(raw: string | ArrayBuffer | ArrayBufferView, sender: Conn) {
     if (typeof raw !== "string") return;
     let message: ClientMessage;
     try {
@@ -339,4 +339,3 @@ export default class FodinhaRoom implements Party.Server {
   }
 }
 
-FodinhaRoom satisfies Party.Worker;

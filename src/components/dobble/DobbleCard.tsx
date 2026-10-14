@@ -5,6 +5,12 @@ import { motion } from "framer-motion";
 import { SYMBOLS } from "@/lib/dobble/cards";
 import { layoutCard } from "./symbolLayout";
 
+// Todos os símbolos usam O MESMO tamanho de fonte — o do maior possível. O "tamanho variado" que
+// faz o Dobble ser desafiador sai de um scale() (que só mexe na composição). Se cada símbolo tivesse
+// um font-size próprio, o navegador teria que criar uma fonte nova e refazer o layout do texto pra
+// cada símbolo de cada carta nova: eram os travadinhos de 40–80ms a cada rodada.
+export const GLYPH_FULL_SIZE = 32; // % do diâmetro da carta (o maior símbolo sorteado tem ~31,9)
+
 interface DobbleCardProps {
   /** Id da carta (null = virada pra baixo). */
   card: number | null;
@@ -56,8 +62,8 @@ export const DobbleCard = memo(function DobbleCard({ card, size, role, highlight
             <span
               className="flex h-full w-full items-center justify-center leading-none select-none"
               style={{
-                fontSize: `calc(var(--card) * ${(spot.size * 0.8) / 100})`,
-                transform: `rotate(${spot.rotate}deg)`,
+                fontSize: `calc(var(--card) * ${(GLYPH_FULL_SIZE * 0.8) / 100})`,
+                transform: `rotate(${spot.rotate}deg) scale(${(spot.size / GLYPH_FULL_SIZE).toFixed(3)})`,
               }}
             >
               {SYMBOLS[spot.symbol]}

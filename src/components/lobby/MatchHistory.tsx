@@ -4,12 +4,14 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { History, Trophy } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
-import { Game, HISTORY_PREFIX as PREFIX, Summary, describeResult, gameOf, roomCodeOf } from "@/lib/matchHistory";
+import { Game, HISTORY_PREFIX as PREFIX, PREFIXED_GAMES, Summary, describeResult, gameOf, roomCodeOf } from "@/lib/matchHistory";
 
 const BADGE: Record<Game, { label: string; className: string }> = {
   fodinha: { label: "Fodinha", className: "bg-red-500/20 text-red-300" },
   ludo: { label: "Ludo", className: "bg-blue-500/20 text-blue-300" },
   dobble: { label: "Dobble", className: "bg-indigo-500/20 text-indigo-300" },
+  uno: { label: "Uno", className: "bg-yellow-500/20 text-yellow-300" },
+  forca: { label: "Forca", className: "bg-emerald-500/20 text-emerald-300" },
 };
 
 interface MatchRow {
@@ -27,8 +29,9 @@ export function MatchHistory({ game, limit = 5 }: { game?: Game; limit?: number 
     let cancelled = false;
     const load = async () => {
       let query = supabase.from("match_history").select("*").order("created_at", { ascending: false }).limit(limit);
-      if (game === "ludo" || game === "dobble") query = query.like("room_id", `${PREFIX[game]}%`);
-      if (game === "fodinha") query = query.not("room_id", "like", `${PREFIX.ludo}%`).not("room_id", "like", `${PREFIX.dobble}%`);
+      if (game && game !== "fodinha") query = query.like("room_id", `${PREFIX[game]}%`);
+      // Fodinha = tudo o que NÃO tem prefixo de outro jogo.
+      if (game === "fodinha") for (const g of PREFIXED_GAMES) query = query.not("room_id", "like", `${PREFIX[g]}%`);
       const { data } = await query;
       if (!cancelled && data) setHistory(data as MatchRow[]);
     };

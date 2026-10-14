@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type * as Party from "partykit/server";
+import type { Conn, ConnContext, RoomHandler, RoomPort } from "./room-types";
 
 // Utilidades pros testes dos room servers: uma sala "de mentira" (só o que o
 // GameRoom usa) e um Supabase "de mentira" (token "user:<nome>" vira o usuário
@@ -25,8 +25,8 @@ export class FakeConn {
   }
 }
 
-export function makeHarness<R extends Party.Server>(
-  RoomClass: new (room: Party.Room) => R,
+export function makeHarness<R extends RoomHandler>(
+  RoomClass: new (room: RoomPort) => R,
   { env = {}, storage: initialStorage }: { env?: Record<string, string>; storage?: Record<string, unknown> } = {}
 ) {
   const conns = new Map<string, FakeConn>();
@@ -43,18 +43,18 @@ export function makeHarness<R extends Party.Server>(
     },
     getConnections: () => conns.values(),
   };
-  const server = new RoomClass(room as unknown as Party.Room);
+  const server = new RoomClass(room as unknown as RoomPort);
   const connect = async (name: string, token = `user:${name}`, claimed = name) => {
     const conn = new FakeConn(`c-${name}-${conns.size}`);
     conns.set(conn.id, conn);
     const ctx = { request: { url: `http://x/parties/test/ABCD?token=${token}&playerId=${claimed}` } };
-    await server.onConnect!(conn as unknown as Party.Connection, ctx as unknown as Party.ConnectionContext);
+    await server.onConnect!(conn as unknown as Conn, ctx as unknown as ConnContext);
     return conn;
   };
-  const say = (conn: FakeConn, msg: object) => server.onMessage!(JSON.stringify(msg), conn as unknown as Party.Connection);
+  const say = (conn: FakeConn, msg: object) => server.onMessage!(JSON.stringify(msg), conn as unknown as Conn);
   const drop = (conn: FakeConn) => {
     conns.delete(conn.id);
-    server.onClose!(conn as unknown as Party.Connection);
+    server.onClose!(conn as unknown as Conn);
   };
   return { server, conns, store, connect, say, drop };
 }

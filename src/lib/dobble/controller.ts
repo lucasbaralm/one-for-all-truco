@@ -208,9 +208,9 @@ export class DobbleController {
     this.signature = signature;
 
     if (s.phase === "countdown") {
-      this.after(TIMING.COUNTDOWN_MS, () => this.step(beginPlay(this.state)));
+      this.after(TIMING.COUNTDOWN_MS, () => this.step(beginPlay(this.state, this.clock())));
     } else if (s.phase === "round_end") {
-      this.after(TIMING.ROUND_END_MS, () => this.step(advanceRound(this.state)));
+      this.after(TIMING.ROUND_END_MS, () => this.step(advanceRound(this.state, this.clock())));
     } else if (s.phase === "playing") {
       this.scheduleBots();
     }
