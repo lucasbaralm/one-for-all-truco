@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePartySocket } from "partysocket/react";
 import { supabase } from "@/lib/supabase/client";
+import { partyHost } from "@/lib/services";
 import { RoomStatus, statusAfterClose, statusAfterOpen } from "./roomRules";
 
 export type { RoomStatus };
 
-// Conexão com um room server (PartyKit) de um jogo com salas: cuida de tudo
+// Conexão com um room server (PartyServer) de um jogo com salas: cuida de tudo
 // que é igual entre Ludo e Dobble — token do Supabase na URL, "join" ao abrir
 // (e ao reconectar), e o que cada código de fechamento significa. O que é de
 // cada jogo (estado, erros, reações) fica com quem usa o hook.
@@ -55,7 +56,7 @@ export function usePartyRoom<M extends { type: string }>({
   }, [user, onMessage]);
 
   const socket = usePartySocket({
-    host: process.env.NEXT_PUBLIC_PARTYKIT_HOST,
+    host: partyHost(),
     party,
     room,
     query: async () => {

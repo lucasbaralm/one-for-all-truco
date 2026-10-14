@@ -8,9 +8,9 @@
       "port": 3000
     },
     {
-      "name": "partykit-dev",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["partykit", "dev"],
+      "name": "party-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "party:dev"],
       "port": 1999
     }
   ]

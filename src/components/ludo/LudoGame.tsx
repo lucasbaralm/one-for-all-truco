@@ -2,26 +2,57 @@
 
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
-import { Bot, Eye, HelpCircle, LogOut, SmilePlus, Trophy, Volume2, VolumeX, WifiOff } from "lucide-react";
+import { Bot, Eye, HelpCircle, LogOut, SmilePlus, Volume2, VolumeX, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Confetti } from "@/components/Confetti";
+import { FeedHistoryButton, FeedList } from "@/components/feed/EventFeed";
+import { GameOverPanel } from "@/components/GameOverPanel";
 import { PlayerAvatar } from "@/components/game/PlayerAvatar";
+import { resultHeadline } from "@/lib/gameResult";
 import { COLORS, FINISHED } from "@/lib/ludo/board";
 import { BOT_LEVEL_LABEL } from "@/lib/ludo/bot";
 import { LudoPlayer, legalMoves } from "@/lib/ludo/engine";
 import { LUDO_EMOJIS, LUDO_ERROR_LABEL } from "@/lib/ludo/protocol";
+import { myChips, standingLine } from "@/lib/ludo/summary";
+import { useTurnAlert } from "@/lib/useTurnAlert";
 import { CORNER_AREA, LUDO_COLORS } from "./colors";
 import { LudoBoardView } from "./LudoBoardView";
+import { LudoCenterDice } from "./LudoCenterDice";
 import { LudoDice } from "./LudoDice";
 import { LudoRulesDialog } from "./LudoRules";
 import { sfx } from "./sfx";
 import { useLudoAnimator } from "./useLudoAnimator";
+import { useLudoFeed } from "./useLudoFeed";
 import { FloatingEmoji, LudoSession, isSoloVsBots } from "./useLudoSession";
 
 // ── Painel de jogador ───────────────────────────────────────────────────────
 
+// Uma barrinha por peça: enche conforme ela anda (acompanha a animação do tabuleiro) e acende ao chegar em casa.
+function PieceBars({ progress, color }: { progress: number[]; color: (typeof LUDO_COLORS)[keyof typeof LUDO_COLORS] }) {
+  return (
+    <div className="flex items-center gap-1">
+      {progress.map((p, i) => {
+        const done = p === FINISHED;
+        const fill = Math.max(0, Math.min(1, (p + 1) / (FINISHED + 1)));
+        return (
+          <span
+            key={i}
+            className="relative h-2 w-5 overflow-hidden rounded-full sm:h-2.5 sm:w-7"
+            style={{ background: "rgba(255,255,255,0.1)", boxShadow: done ? `0 0 7px ${color.main}` : undefined }}
+          >
+            <span
+              className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-300"
+              style={{ width: `${fill * 100}%`, background: done ? color.light : color.main }}
+            />
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function PlayerPanel({
   player,
+  progress,
   area,
   active,
   isMe,
@@ -29,6 +60,8 @@ function PlayerPanel({
   children,
 }: {
   player: LudoPlayer;
+  /** Progresso de cada peça como está desenhado agora (acompanha a animação). */
+  progress: number[];
   area: string;
   active: boolean;
   isMe: boolean;
@@ -36,7 +69,7 @@ function PlayerPanel({
   children?: ReactNode;
 }) {
   const t = LUDO_COLORS[player.color];
-  const finished = player.pieces.filter((x) => x === FINISHED).length;
+  const finished = progress.filter((x) => x === FINISHED).length;
   const away = !player.bot && !player.connected;
   return (
     <div
@@ -89,19 +122,9 @@ function PlayerPanel({
           <p className="truncate text-[0.65rem] leading-tight text-zinc-400 sm:text-xs">
             {player.bot ? `Bot ${BOT_LEVEL_LABEL[player.bot]}` : away ? "Desconectado — bot assume" : " "}
           </p>
-          <div className="mt-1 flex items-center gap-1" aria-label={`${finished} de 4 peças em casa`}>
-            {[0, 1, 2, 3].map((i) => (
-              <span
-                key={i}
-                className="h-2 w-2 rounded-full sm:h-2.5 sm:w-2.5"
-                style={
-                  i < finished
-                    ? { background: t.main, boxShadow: `0 0 6px ${t.main}` }
-                    : { border: `1.5px solid ${t.main}88` }
-                }
-              />
-            ))}
-            <span className="ml-0.5 text-[0.6rem] font-semibold text-zinc-400 sm:text-xs">{finished}/4</span>
+          <div className="mt-1 flex items-center gap-1.5" aria-label={`${finished} de 4 peças em casa`}>
+            <PieceBars progress={progress} color={t} />
+            <span className="text-[0.6rem] font-semibold text-zinc-400 sm:text-xs">{finished}/4</span>
           </div>
         </div>
 
@@ -129,8 +152,10 @@ export default function LudoGame({ session, onExit, title }: LudoGameProps) {
   const [showRules, setShowRules] = useState(false);
   const [showEmojis, setShowEmojis] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
+  // Só avisos do servidor ("não é a sua vez"): o que acontece no jogo vai pro histórico.
   const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
   const sentFor = useRef("");
+  const feed = useLudoFeed(shown, me);
 
   // localStorage só existe no navegador: lê depois de montar pra não divergir do HTML do servidor.
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -173,38 +198,14 @@ export default function LudoGame({ session, onExit, title }: LudoGameProps) {
     session.send({ type: "move", piece });
   };
 
-  // ── sons e avisos reagindo às mudanças mostradas
-  const lastMoveSeq = useRef<number | null>(null);
-  const lastRollSeq = useRef<number | null>(null);
-  useEffect(() => {
-    if (!shown) return;
-    const first = lastMoveSeq.current === null;
-    if (!first && shown.moveSeq !== lastMoveSeq.current && shown.lastMove) {
-      const lm = shown.lastMove;
-      const mover = shown.players.find((p) => p.id === lm.playerId);
-      const parts: string[] = [];
-      if (lm.captures.length > 0) {
-        const victims = lm.captures.map((c) => shown.players.find((p) => p.id === c.playerId)?.name ?? "alguém");
-        parts.push(`💥 ${mover?.name} capturou uma peça de ${[...new Set(victims)].join(" e ")}!`);
-      } else if (lm.finished) {
-        parts.push(`🏠 ${mover?.name} colocou uma peça em casa!`);
-      }
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- aviso reagindo a uma jogada que acabou de ser mostrada
-      if (parts.length) setToast({ id: shown.moveSeq, text: parts[0] });
-    }
-    if (!first && shown.rollSeq !== lastRollSeq.current && shown.lastRoll?.forfeited) {
-      const who = shown.players.find((p) => p.id === shown.lastRoll?.playerId)?.name;
-      setToast({ id: shown.rollSeq, text: `🎲 Três 6 seguidos — ${who} perde a vez` });
-    }
-    lastMoveSeq.current = shown.moveSeq;
-    lastRollSeq.current = shown.rollSeq;
-  }, [shown]);
-
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast((cur) => (cur?.id === toast.id ? null : cur)), 2800);
     return () => clearTimeout(t);
   }, [toast]);
+
+  // Aba em segundo plano e a bola está comigo: o título da aba pisca.
+  useTurnAlert(!gameOver && isMyTurn && (canRoll || moves.length > 0), "Sua vez!");
 
   const turnKey = shown ? `${shown.turn}:${shown.moveSeq}:${shown.phase}` : "";
   useEffect(() => {
@@ -249,8 +250,13 @@ export default function LudoGame({ session, onExit, title }: LudoGameProps) {
   } else {
     statusText = `Vez de ${current.name}`;
   }
+  // Aviso do servidor ocupa a linha de status por uns segundos.
+  if (toast) {
+    statusText = toast.text;
+    statusTone = "text-red-300";
+  }
   const extraLabel =
-    shown.extraTurn && !gameOver
+    shown.extraTurn && !gameOver && !toast
       ? { six: "tirou 6", capture: "capturou", home: "chegou em casa" }[shown.extraTurn]
       : null;
 
@@ -280,6 +286,7 @@ export default function LudoGame({ session, onExit, title }: LudoGameProps) {
             </span>
           )}
           <div className="flex items-center gap-1">
+            <FeedHistoryButton entries={feed.entries} />
             {hasOtherHumans && !isSpectator && (
               <button
                 onClick={() => setShowEmojis((v) => !v)}
@@ -340,7 +347,15 @@ export default function LudoGame({ session, onExit, title }: LudoGameProps) {
               const area = CORNER_AREA[corner];
               const isActive = !gameOver && current?.id === p.id;
               return (
-                <PlayerPanel key={p.id} player={p} area={area} active={isActive} isMe={p.id === me} emojis={session.emojis}>
+                <PlayerPanel
+                  key={p.id}
+                  player={p}
+                  progress={view.pieces[p.id] ?? p.pieces}
+                  area={area}
+                  active={isActive}
+                  isMe={p.id === me}
+                  emojis={session.emojis}
+                >
                   {isActive && (
                     <motion.div
                       layoutId="ludo-dice"
@@ -372,19 +387,15 @@ export default function LudoGame({ session, onExit, title }: LudoGameProps) {
                 myColor={myPlayer?.color ?? null}
                 onMove={movePiece}
               />
-              <AnimatePresence>
-                {toast && (
-                  <motion.div
-                    key={toast.id}
-                    className="pointer-events-none absolute inset-x-2 top-2 z-[55] mx-auto w-fit max-w-full rounded-full bg-black/80 px-4 py-2 text-center text-xs font-bold text-white shadow-xl backdrop-blur sm:text-sm"
-                    initial={{ y: -20, opacity: 0, scale: 0.9 }}
-                    animate={{ y: 0, opacity: 1, scale: 1 }}
-                    exit={{ y: -12, opacity: 0 }}
-                  >
-                    {toast.text}
-                  </motion.div>
-                )}
-              </AnimatePresence>
+              {/* o dado no centro: pede o clique na minha vez e rola à vista na dos outros */}
+              {!gameOver && current && (
+                <LudoCenterDice view={view} canRoll={canRoll} onRoll={roll} color={LUDO_COLORS[current.color]} />
+              )}
+            </div>
+
+            {/* histórico: ocupa o vão entre os painéis (só em tela larga; no resto, o botão do topo) */}
+            <div className="ludo-feed">
+              <FeedList entries={feed.entries} visible={9} />
             </div>
           </div>
         </div>
@@ -419,62 +430,29 @@ export default function LudoGame({ session, onExit, title }: LudoGameProps) {
       {/* fim de partida */}
       <AnimatePresence>
         {gameOver && !view.busy && shown.standings && (
-          <>
-            {shown.winnerId === me && <Confetti />}
-            <motion.div
-              className="fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
-              <motion.div
-                className="w-full max-w-sm rounded-3xl border border-zinc-700 bg-zinc-900 p-6 text-center shadow-2xl"
-                initial={{ scale: 0.7, y: 40 }}
-                animate={{ scale: 1, y: 0 }}
-                transition={{ type: "spring", stiffness: 220, damping: 18 }}
-              >
-                <motion.div
-                  animate={{ rotate: [0, -8, 8, -4, 0], scale: [1, 1.15, 1] }}
-                  transition={{ duration: 1.2, delay: 0.3 }}
-                  className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-full bg-yellow-400/15"
-                >
-                  <Trophy className="h-9 w-9 text-yellow-400" />
-                </motion.div>
-                <p className="text-sm font-semibold uppercase tracking-widest text-zinc-400">
-                  {shown.winnerId === me ? "Você venceu!" : "Fim de jogo"}
-                </p>
-                <h2 className="mb-4 text-3xl font-black text-white">
-                  {players.find((p) => p.id === shown.winnerId)?.name}
-                </h2>
-                <div className="mb-5 space-y-2">
-                  {shown.standings.map((s, i) => (
-                    <motion.div
-                      key={s.playerId}
-                      initial={{ x: -20, opacity: 0 }}
-                      animate={{ x: 0, opacity: 1 }}
-                      transition={{ delay: 0.25 + i * 0.1 }}
-                      className="flex items-center gap-3 rounded-xl bg-black/40 px-3 py-2"
-                    >
-                      <span className="w-5 text-lg font-black text-zinc-500">{i + 1}</span>
-                      <span className="h-3 w-3 rounded-full" style={{ background: LUDO_COLORS[s.color].main }} />
-                      <span className="flex-1 truncate text-left font-bold text-white">{s.name}</span>
-                      <span className="text-sm text-zinc-400">{s.finished}/4 em casa</span>
-                    </motion.div>
-                  ))}
-                </div>
-                <div className="flex flex-col gap-2">
-                  {!isSpectator && (
-                    <Button onClick={session.playAgain} className="h-11 bg-white font-bold text-black hover:bg-zinc-200">
-                      {soloVsBots ? "Jogar de novo" : "Voltar para a sala"}
-                    </Button>
-                  )}
-                  <Button variant="secondary" onClick={onExit} className="h-10">
-                    <LogOut className="h-4 w-4" /> Sair
-                  </Button>
-                </div>
-              </motion.div>
-            </motion.div>
-          </>
+          <GameOverPanel
+            key="game-over"
+            headline={resultHeadline(
+              shown.standings.map((s) => ({ id: s.playerId, name: s.name })),
+              shown.winnerId,
+              myPlayer ? me : null
+            )}
+            myStats={myChips(shown.standings.find((s) => s.playerId === me))}
+            rows={shown.standings.map((s) => ({
+              id: s.playerId,
+              name: s.name,
+              color: LUDO_COLORS[s.color].main,
+              detail: `${s.finished}/4 em casa`,
+              stats: standingLine(s),
+              isMe: s.playerId === me,
+            }))}
+            actions={[
+              ...(!isSpectator
+                ? [{ label: soloVsBots ? "Jogar de novo" : "Voltar para a sala", onClick: session.playAgain, primary: true }]
+                : []),
+              { label: "Sair", onClick: onExit, icon: <LogOut className="h-4 w-4" /> },
+            ]}
+          />
         )}
       </AnimatePresence>
 

@@ -1,32 +1,34 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ReactNode, createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { RefreshCw, TriangleAlert } from "lucide-react";
-import { ServiceHealth, checkPartykit, checkSupabase } from "@/lib/services";
+import { ServiceHealth, checkParty, checkSupabase } from "@/lib/services";
 
 const RECHECK_MS = 15_000;
 
 /**
- * Estado do room server (PartyKit) e do Supabase, conferido na hora que a
+ * Estado do room server (Worker do PartyServer) e do Supabase, conferido na hora que a
  * tela abre, de tempos em tempos, e quando a aba volta a ter foco / a rede volta.
+ * `enabled = false` não confere nada (quando já existe um provider conferindo por todos).
  */
-export function useServiceStatus() {
-  const [partykit, setPartykit] = useState<ServiceHealth>("checking");
+function useServicePoller(enabled = true) {
+  const [party, setParty] = useState<ServiceHealth>("checking");
   const [supabase, setSupabase] = useState<ServiceHealth>("checking");
   const [rechecking, setRechecking] = useState(false);
   const alive = useRef(true);
 
   const recheck = useCallback(async () => {
     setRechecking(true);
-    const [pk, sb] = await Promise.all([checkPartykit(), checkSupabase()]);
+    const [pk, sb] = await Promise.all([checkParty(), checkSupabase()]);
     if (!alive.current) return;
-    setPartykit(pk ? "ok" : "down");
+    setParty(pk ? "ok" : "down");
     setSupabase(sb ? "ok" : "down");
     setRechecking(false);
   }, []);
 
   useEffect(() => {
+    if (!enabled) return;
     alive.current = true;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sincroniza com serviços externos (rede)
     void recheck();
@@ -39,29 +41,45 @@ export function useServiceStatus() {
       window.removeEventListener("focus", recheck);
       window.removeEventListener("online", recheck);
     };
-  }, [recheck]);
+  }, [recheck, enabled]);
 
-  return { partykit, supabase, recheck, rechecking };
+  return { party, supabase, recheck, rechecking };
 }
 
-export const PARTYKIT_DOWN_TITLE = "Servidor de jogo (PartyKit) fora do ar";
+type ServiceStatusValue = ReturnType<typeof useServicePoller>;
+const StatusContext = createContext<ServiceStatusValue | null>(null);
+
+/** Confere os serviços UMA vez pra tudo que está embaixo (o aviso do topo e os cartões do menu usam o mesmo resultado). */
+export function ServiceStatusProvider({ children }: { children: ReactNode }) {
+  const value = useServicePoller(true);
+  return <StatusContext.Provider value={value}>{children}</StatusContext.Provider>;
+}
+
+/** Estado dos serviços: o do provider, se houver; senão confere por conta própria. */
+export function useServiceStatus() {
+  const shared = useContext(StatusContext);
+  const own = useServicePoller(!shared);
+  return shared ?? own;
+}
+
+export const PARTY_DOWN_TITLE = "Servidor de jogo fora do ar";
 export const SUPABASE_DOWN_TITLE = "Supabase não está respondendo";
 
 const isDev = process.env.NODE_ENV !== "production";
 
 /**
- * Aviso no topo da tela inicial (login e menu de jogos) quando o PartyKit ou o
+ * Aviso no topo da tela inicial (login e menu de jogos) quando o servidor de jogo ou o
  * Supabase estão fora do ar. Some sozinho quando voltam.
  */
 export function ServiceStatusBanner() {
-  const { partykit, supabase, recheck, rechecking } = useServiceStatus();
+  const { party, supabase, recheck, rechecking } = useServiceStatus();
   const problems: { key: string; title: string; detail: string }[] = [];
-  if (partykit === "down") {
+  if (party === "down") {
     problems.push({
-      key: "partykit",
-      title: PARTYKIT_DOWN_TITLE,
+      key: "party",
+      title: PARTY_DOWN_TITLE,
       detail: isDev
-        ? "Salas online e partidas contra bots não vão conectar. Rode `npx partykit dev` no terminal."
+        ? "Salas online e partidas contra bots não vão conectar. Rode `npm run party:dev` no terminal."
         : "Salas online e partidas contra bots não vão conectar até ele voltar.",
     });
   }

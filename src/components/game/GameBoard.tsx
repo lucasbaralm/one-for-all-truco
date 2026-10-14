@@ -12,11 +12,24 @@ import {
 } from "@/lib/game/state-machine";
 import { PlayerPresence } from "./RoomManager";
 import { PlayerAvatar } from "./PlayerAvatar";
+import { FeedHistoryButton, FeedList } from "@/components/feed/EventFeed";
+import { GameOverPanel } from "@/components/GameOverPanel";
+import { resultHeadline } from "@/lib/gameResult";
+import { useTurnAlert } from "@/lib/useTurnAlert";
+import { ActiveArrow, ActiveBadge } from "./ActiveIndicators";
+import { BetMeter } from "./BetMeter";
+import { ScoreDelta } from "./ScoreDelta";
+import { sfx } from "./sfx";
+import { useFodinhaFeed } from "./useFodinhaFeed";
+import { HandCard } from "./HandCard";
+import { PlayingCard, TABLE_BG } from "./PlayingCard";
+import { ShufflePanel } from "./ShufflePanel";
 import { Card as GameCard, getWinningCardIndex } from "@/lib/game/rules";
 import { ClientMessage, ServerMessage } from "@/lib/game/party-protocol";
 import { usePartySocket } from "partysocket/react";
+import { partyHost } from "@/lib/services";
 import { motion, AnimatePresence, LayoutGroup } from "framer-motion";
-import { Spade, Heart, Club, Diamond, SmilePlus, ChevronDown, ChevronUp, LogOut, Flag, WifiOff, Pause, Play } from "lucide-react";
+import { SmilePlus, LogOut, Flag, WifiOff, Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/components/ThemeProvider";
 import {
@@ -54,7 +67,7 @@ interface TrickResult {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GameBoard — o room server do PartyKit (party/server.ts) é a única
+// GameBoard — o room server (party/server.ts) é a única
 // autoridade: aplica cada ação, persiste em Postgres (rooms.state) e
 // transmite o resultado pra todo mundo. Todo cliente aqui (sem distinção de
 // "host") prevê sua própria ação localmente (mesma função pura que o
@@ -70,6 +83,11 @@ export default function GameBoard({
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [emojis, setEmojis] = useState<{ id: string; emoji: string; fromPlayerId: string }[]>([]);
   const [trickResult, setTrickResult] = useState<TrickResult | null>(null);
+  const { feed, roundStats } = useFodinhaFeed(gameState, playerName);
+  const [soundOn, setSoundOn] = useState(true);
+  // localStorage só existe no navegador: lê depois de montar pra não divergir do HTML do servidor.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => setSoundOn(sfx.isEnabled()), []);
   // Ordem em que EU escolhi organizar minha própria mão (arrastando) — puramente
   // visual/local, não é regra de jogo. Guarda "naipe+valor" (só existe uma
   // cópia de cada carta no baralho, então isso já é uma chave única e estável
@@ -235,7 +253,9 @@ export default function GameBoard({
   // Supabase vai como query param pro servidor verificar quem é de verdade
   // antes de aceitar qualquer mensagem (ver onConnect em party/server.ts).
   const socket = usePartySocket({
-    host: process.env.NEXT_PUBLIC_PARTYKIT_HOST,
+    host: partyHost(),
+    // A Fodinha é o binding "Main" do Worker (/parties/main/<sala>).
+    party: "main",
     room: roomId,
     query: async () => {
       const { data } = await supabase.auth.getSession();
@@ -327,6 +347,22 @@ export default function GameBoard({
     disconnectMsRemaining > 0 &&
     ["shuffling", "betting", "playing"].includes(gameState.phase);
 
+  // ── "Sua vez" (embaralhar, apostar ou jogar): som e, com a aba escondida, o título da aba pisca ──
+  const meNow = gameState?.players.find((p) => p.name === playerName);
+  const meActiveNow =
+    !!gameState &&
+    !!meNow &&
+    (gameState.phase === "shuffling"
+      ? gameState.players[gameState.dealerIndex]?.id === meNow.id
+      : gameState.phase === "betting" || gameState.phase === "playing"
+        ? gameState.players[gameState.currentPlayerIndex]?.id === meNow.id
+        : false);
+  useTurnAlert(meActiveNow, "Sua vez!");
+  const turnKey = gameState ? `${gameState.phase}:${gameState.currentRoundCards}:${gameState.currentPlayerIndex}:${gameState.tableCards.length}` : "";
+  useEffect(() => {
+    if (meActiveNow && !document.hidden) sfx.yourTurn();
+  }, [turnKey, meActiveNow]);
+
   // ── Guard: waiting for state ─────────────────────────────────────────────
   if (!gameState) {
     return (
@@ -369,7 +405,9 @@ export default function GameBoard({
                   </div>
                 </div>
                 <span className={`text-xl font-bold ${idx === 0 ? "text-green-400" : "text-red-400"}`}>
-                  💀 {p.score}
+                  <ScoreDelta value={p.score} from={p.score - Math.abs(p.bet !== null && p.bet !== p.tricks ? p.bet - p.tricks : 0)}>
+                    {(shown) => <>💀 {shown}</>}
+                  </ScoreDelta>
                 </span>
               </motion.div>
             );
@@ -382,47 +420,35 @@ export default function GameBoard({
   // ── Game over screen ─────────────────────────────────────────────────────
   if (gameState.phase === "game_over") {
     const sorted = [...gameState.players].sort((a, b) => a.score - b.score);
+    const meOver = sorted.find((p) => p.name === playerName);
+    // Só mostra taxa de acerto se este cliente viu (quase) todas as rodadas — quem recarregou no meio tem números pela metade.
+    const sawAllRounds = roundStats.rounds > 0 && roundStats.rounds >= gameState.currentRoundCards - 1;
+    const hitsLine = (name: string) => (sawAllRounds ? `✅ acertou ${roundStats.hits[name] ?? 0} de ${roundStats.rounds} rodadas` : "");
     return (
-      <div className="flex flex-col items-center justify-center flex-1 text-white space-y-8">
-        <motion.h1 initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring" }}
-          className="text-5xl font-black text-red-500 mb-6">
-          FIM DE JOGO
-        </motion.h1>
-        <div className="bg-zinc-900 p-8 rounded-2xl border border-zinc-800 w-full max-w-md shadow-2xl">
-          <h2 className="text-2xl font-bold mb-6 text-center text-zinc-300">
-            PLACAR FINAL (Menos Pontos Vence)
-          </h2>
-          <div className="space-y-4">
-            {sorted.map((p, index) => (
-              <motion.div key={p.id} initial={{ x: -40, opacity: 0 }} animate={{ x: 0, opacity: 1 }}
-                transition={{ delay: index * 0.1 }}
-                className="flex justify-between items-center bg-zinc-950 p-4 rounded-xl border border-zinc-800/50">
-                <div className="flex items-center gap-4">
-                  <span className="text-2xl font-black text-zinc-600">#{index + 1}</span>
-                  <span className="text-xl font-bold">
-                    {p.name} {p.name === playerName ? "(Você)" : ""}
-                  </span>
-                </div>
-                <span className={`text-xl font-bold ${index === 0 ? "text-green-500" : "text-red-500"}`}>
-                  {p.score} pts
-                </span>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-        <Button
-          onClick={() => {
-            send({
-              type: "start_game",
-              players: initialPlayers.map((p) => ({ id: p.id, name: p.name, avatarUrl: p.avatarUrl })),
-            });
-          }}
-          className="w-full max-w-md h-14 text-lg font-bold bg-white text-black hover:bg-zinc-200">
-          Começar Nova Partida
-        </Button>
-        <Button variant="secondary" onClick={() => router.push("/lobby/fodinha")} className="w-full max-w-md">
-          <LogOut className="w-4 h-4" /> Voltar ao Menu
-        </Button>
+      <div className="flex flex-col items-center justify-center flex-1">
+        <GameOverPanel
+          headline={resultHeadline(sorted.map((p) => ({ id: p.id, name: p.name })), sorted[0]?.id ?? null, meOver?.id ?? null)}
+          myStats={meOver && sawAllRounds ? [hitsLine(meOver.name), `💀 ${meOver.score} pts no total`] : []}
+          rows={sorted.map((p) => ({
+            id: p.id,
+            name: p.name,
+            detail: `${p.score} pts`,
+            stats: hitsLine(p.name),
+            isMe: p.name === playerName,
+          }))}
+          actions={[
+            {
+              label: "Começar Nova Partida",
+              primary: true,
+              onClick: () =>
+                send({
+                  type: "start_game",
+                  players: initialPlayers.map((p) => ({ id: p.id, name: p.name, avatarUrl: p.avatarUrl })),
+                }),
+            },
+            { label: "Voltar ao Menu", onClick: () => router.push("/lobby/fodinha"), icon: <LogOut className="w-4 h-4" /> },
+          ]}
+        />
       </div>
     );
   }
@@ -554,7 +580,7 @@ export default function GameBoard({
             <div className="font-bold text-white text-[11px] sm:text-sm whitespace-nowrap truncate max-w-[5.5rem] sm:max-w-[9rem]">{p.name}</div>
           </div>
           <div className="flex justify-center gap-x-1.5 sm:gap-x-2 text-[10px] sm:text-xs leading-tight mt-0.5 whitespace-nowrap">
-            <span className="text-red-400 font-bold">💀 {p.score}<span className="hidden sm:inline"> pts</span></span>
+            <span className="text-red-400 font-bold"><ScoreDelta value={p.score}>{(shown) => <>💀 {shown}</>}</ScoreDelta><span className="hidden sm:inline"> pts</span></span>
             <span className="text-zinc-400">✅ {p.tricks}/{p.bet ?? "?"}</span>
           </div>
           <div className="relative mx-auto mt-1" style={{ width: `${areaW}rem`, height: `${areaH}rem` }}>
@@ -723,6 +749,24 @@ export default function GameBoard({
                 : "Votar p/ Encerrar"}
             </span>
           </button>
+          <FeedHistoryButton
+            align="left"
+            entries={feed.entries}
+            className="flex items-center justify-center bg-black/50 hover:bg-black/70 border border-white/10 text-zinc-300 hover:text-white p-1.5 sm:p-2 rounded-lg sm:rounded-xl backdrop-blur-sm transition-all shrink-0"
+            iconClassName="w-3 h-3 sm:w-3.5 sm:h-3.5"
+          />
+          <button
+            onClick={() => {
+              const next = !soundOn;
+              sfx.setEnabled(next);
+              setSoundOn(next);
+              if (next) sfx.unlock();
+            }}
+            aria-label={soundOn ? "Desligar som" : "Ligar som"}
+            title={soundOn ? "Desligar som" : "Ligar som"}
+            className="flex items-center justify-center bg-black/50 hover:bg-black/70 border border-white/10 text-zinc-300 hover:text-white p-1.5 sm:p-2 rounded-lg sm:rounded-xl backdrop-blur-sm transition-all shrink-0">
+            {soundOn ? <Volume2 className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> : <VolumeX className="w-3 h-3 sm:w-3.5 sm:h-3.5" />}
+          </button>
         </div>
 
         {/* ── Leave confirmation modal ── */}
@@ -872,6 +916,17 @@ export default function GameBoard({
                 )}
               </AnimatePresence>
 
+              {/* Soma das apostas x vazas da rodada (só enquanto se aposta) */}
+              {gameState.phase === "betting" && (
+                <div className="absolute bottom-1 left-1/2 z-20 -translate-x-1/2">
+                  <BetMeter
+                    sum={gameState.players.reduce((n, p) => n + (p.bet ?? 0), 0)}
+                    cards={gameState.currentRoundCards}
+                    pending={gameState.players.filter((p) => p.bet === null).length}
+                  />
+                </div>
+              )}
+
               {/* Painéis de embaralhar / apostar: por cima da mesa (que está
                   vazia nessas fases), centralizados na célula — não empurram
                   mais o layout nem roubam altura da mesa. */}
@@ -905,12 +960,14 @@ export default function GameBoard({
                       className="pointer-events-auto max-w-full bg-red-950/95 border border-red-500 p-2 sm:p-4 rounded-xl text-center space-y-2 sm:space-y-3 shadow-[0_0_30px_rgba(220,38,38,0.2)]">
                       <h3 className="text-white font-bold text-sm sm:text-lg">Sua vez! Quantas você faz?</h3>
                       {forbiddenBet !== null && forbiddenBet >= 0 && forbiddenBet <= me.cards.length && (
-                        <p className="text-red-300 text-[10px] sm:text-xs">Você não pode fechar a rodada apostando {forbiddenBet}</p>
+                        <p className="rounded-lg border border-amber-400/50 bg-amber-500/15 px-2.5 py-1.5 text-xs font-bold text-amber-200 sm:text-sm">
+                          🚫 Você não pode apostar {forbiddenBet}: a soma fecharia em {gameState.currentRoundCards} e alguém precisa errar
+                        </p>
                       )}
                       <div className="flex gap-1.5 sm:gap-2 flex-wrap justify-center">
                         {Array.from({ length: me.cards.length + 1 }).map((_, i) => (
                           <Button key={i} onClick={() => sendBet(i)} variant="secondary" disabled={i === forbiddenBet}
-                            className="w-8 h-8 sm:w-10 sm:h-10 text-sm sm:text-base font-bold disabled:opacity-30 disabled:cursor-not-allowed">{i}</Button>
+                            className={`w-8 h-8 sm:w-10 sm:h-10 text-sm sm:text-base font-bold disabled:opacity-40 disabled:cursor-not-allowed ${i === forbiddenBet ? "line-through ring-1 ring-red-500/70" : ""}`}>{i}</Button>
                         ))}
                       </div>
                     </motion.div>
@@ -959,7 +1016,16 @@ export default function GameBoard({
           // da linha da mão — sem essa folga o overflow-hidden do board cortava.
           <div className="shrink-0 flex flex-col items-center gap-1 sm:gap-2 pb-4 sm:pb-5 xl:grid xl:grid-cols-[1fr_auto_1fr] xl:items-end xl:gap-6">
             <div className="flex items-end gap-1 sm:gap-4 justify-center px-1 sm:px-4 xl:contents">
-              <div className="flex items-end gap-1 sm:gap-4 xl:col-start-1 xl:row-start-1 xl:justify-self-end">
+              {/* Célula da esquerda (tela larga): histórico à esquerda, vira + vazas à direita. O histórico
+                  ocupa o que sobrar ao lado das vazas (encolhe quando elas crescem e some se ficar estreito
+                  demais — ver .fodinha-feed), então nunca fica por cima de nada. */}
+              <div className="flex items-end gap-1 sm:gap-4 xl:col-start-1 xl:row-start-1 xl:w-full xl:min-w-0 xl:justify-between">
+                <div className="fodinha-feed relative hidden h-0 min-w-0 max-w-[16rem] flex-1 self-end xl:block">
+                  <div className="fodinha-feed-inner absolute inset-x-0 bottom-0">
+                    <FeedList entries={feed.entries} visible={5} />
+                  </div>
+                </div>
+              <div className="flex shrink-0 items-end gap-1 sm:gap-4">
                 {/* Vira. `scale-[]` sozinho não reduz o espaço reservado no
                     layout (só a pintura), então o wrapper fixa o tamanho já
                     reduzido. */}
@@ -995,6 +1061,7 @@ export default function GameBoard({
                   </AnimatePresence>
                 </div>
               </div>
+              </div>
 
               {/* My avatar */}
               <div className="flex flex-col items-center gap-1 shrink-0 xl:col-start-3 xl:row-start-1 xl:justify-self-start">
@@ -1029,7 +1096,7 @@ export default function GameBoard({
                   {isMeActive && activeActionLabel && (
                     <div className="flex justify-center"><ActiveBadge label={activeActionLabel} /></div>
                   )}
-                  <div className="text-red-400 font-bold text-[10px] sm:text-sm">💀 {me.score} pts</div>
+                  <div className="text-red-400 font-bold text-[10px] sm:text-sm"><ScoreDelta value={me.score}>{(shown) => <>💀 {shown}</>}</ScoreDelta> pts</div>
                   <div className="text-zinc-400 text-[10px] sm:text-xs">Vazas: {me.tricks} / {me.bet !== null ? me.bet : "?"}</div>
                 </div>
               </div>
@@ -1063,354 +1130,5 @@ export default function GameBoard({
         )}
       </div>
     </LayoutGroup>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// HAND CARD — uma carta arrastável na minha mão. Arrastar e soltar em cima da
-// mesa (tableDropRef) joga a carta de verdade; soltar em qualquer outro lugar
-// só reorganiza a mão (reordena pra posição mais próxima de onde caiu). Um
-// toque sem arrastar não faz nada — de propósito, pra não jogar sem querer
-// enquanto só se está tentando reorganizar.
-// ─────────────────────────────────────────────────────────────────────────────
-function HandCard({
-  cardKey,
-  card,
-  hidden,
-  theme,
-  backIndex,
-  isMyTurn,
-  canDrag,
-  marginLeftRem,
-  fanAngle,
-  layoutId,
-  onRegisterRef,
-  onPlay,
-  onReorder,
-  tableDropRef,
-}: {
-  cardKey: string;
-  card: GameCard;
-  hidden: boolean;
-  theme: string;
-  backIndex: number;
-  isMyTurn: boolean;
-  canDrag: boolean;
-  marginLeftRem: number;
-  fanAngle: number;
-  layoutId: string;
-  onRegisterRef: (key: string, el: HTMLDivElement | null) => void;
-  onPlay: () => void;
-  onReorder: (key: string, dropClientX: number) => void;
-  tableDropRef: React.RefObject<HTMLDivElement | null>;
-}) {
-  const [dragging, setDragging] = useState(false);
-
-  return (
-    <motion.div
-      ref={(el) => onRegisterRef(cardKey, el)}
-      layout
-      layoutId={layoutId}
-      drag={canDrag}
-      dragSnapToOrigin
-      dragElastic={0.15}
-      dragMomentum={false}
-      // Leque de verdade: cada carta gira em torno de um pivô abaixo da mão
-      // (transformOrigin), não do próprio centro — daí o leque abrir "pra
-      // cima" com as pontas girando pra fora, igual um baralho na mão.
-      animate={{ rotate: fanAngle }}
-      whileHover={isMyTurn && !dragging ? { y: -24, zIndex: 50 } : {}}
-      whileDrag={{ scale: 1.14, zIndex: 100, rotate: 0, boxShadow: "0 22px 36px rgba(0,0,0,0.55)" }}
-      onDragStart={() => setDragging(true)}
-      onDragEnd={(_e, info) => {
-        setDragging(false);
-        const tableRect = tableDropRef.current?.getBoundingClientRect();
-        const droppedOnTable =
-          !!tableRect &&
-          info.point.x >= tableRect.left &&
-          info.point.x <= tableRect.right &&
-          info.point.y >= tableRect.top &&
-          info.point.y <= tableRect.bottom;
-        if (droppedOnTable && isMyTurn) {
-          onPlay();
-        } else {
-          onReorder(cardKey, info.point.x);
-        }
-      }}
-      transition={{ type: "spring", stiffness: 300, damping: 26 }}
-      style={{ marginLeft: `${-marginLeftRem}rem`, transformOrigin: "50% 140%" }}
-      className={`relative ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-default opacity-90"}`}>
-      <PlayingCard card={card} hidden={hidden} theme={theme} backIndex={backIndex} />
-      {isMyTurn && !dragging && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-          className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 bg-yellow-400 rounded-full" />
-      )}
-    </motion.div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ACTIVE-PLAYER BADGE — small pulsing label showing what the active player is
-// doing right now (embaralhando / apostando / escolhendo carta).
-// ─────────────────────────────────────────────────────────────────────────────
-function ActiveBadge({ label, className = "mt-1" }: { label: string; className?: string }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: -4 }}
-      animate={{ opacity: [0.75, 1, 0.75], y: 0 }}
-      transition={{ opacity: { repeat: Infinity, duration: 1.4 }, y: { duration: 0.2 } }}
-      className={`${className} inline-flex items-center gap-1 bg-yellow-400/15 border border-yellow-400/50 text-yellow-300 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full whitespace-nowrap`}>
-      {label}
-    </motion.div>
-  );
-}
-
-// Seta que aponta pro portrait de quem está ativo — "direction" é de onde a
-// seta aponta: "down" fica em cima do avatar (oponentes), "up" fica embaixo
-// (minha área, que já está na parte de baixo da tela).
-function ActiveArrow({ direction }: { direction: "down" | "up" }) {
-  const Icon = direction === "down" ? ChevronDown : ChevronUp;
-  return (
-    <motion.div
-      animate={{ y: direction === "down" ? [0, 6, 0] : [0, -6, 0] }}
-      transition={{ repeat: Infinity, duration: 0.8 }}
-      className="text-yellow-400 drop-shadow-[0_0_8px_rgba(250,204,21,0.8)]">
-      <Icon className="w-9 h-9 sm:w-11 sm:h-11" strokeWidth={3} />
-    </motion.div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SHUFFLE PANEL
-// ─────────────────────────────────────────────────────────────────────────────
-type ShuffleType = "cut" | "riffle" | "overhand" | "lucas";
-
-function ShufflePanel({
-  isDealer,
-  dealerName,
-  onShuffle,
-}: {
-  isDealer: boolean;
-  dealerName: string;
-  onShuffle: (t: ShuffleType) => void;
-}) {
-  const [preview, setPreview] = useState<ShuffleType | null>(null);
-  const [confirmed, setConfirmed] = useState<ShuffleType | null>(null);
-
-  // No mobile não existe "hover" de verdade, então o preview (que só rodava
-  // com onHoverStart) nunca aparecia lá — e mesmo no desktop, ao clicar a
-  // fase mudava tão rápido que ninguém chegava a ver a animação escolhida.
-  // Ao tocar/clicar: mostra a animação escolhida por um instante e só DEPOIS
-  // manda embaralhar de verdade, pra dar tempo de ver o que foi selecionado.
-  const handlePick = (type: ShuffleType) => {
-    if (confirmed) return;
-    setConfirmed(type);
-    setPreview(type);
-    setTimeout(() => onShuffle(type), 1100);
-  };
-
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-      className="flex items-center justify-center flex-col bg-black/75 border border-white/10 rounded-2xl backdrop-blur-md gap-2 sm:gap-4 p-3 sm:p-5 [@media(max-height:720px)]:gap-1.5 [@media(max-height:720px)]:p-2.5">
-      {isDealer ? (
-        <>
-          <span className="text-white font-black text-sm sm:text-lg text-center px-2">Sua vez de embaralhar!</span>
-          {/* Em telas baixas (notebook com barra do navegador + barra de tarefas)
-              o painel precisa caber na célula da mesa: some o subtítulo, a
-              descrição dos botões e a prévia animada. */}
-          <span className="text-zinc-400 text-xs sm:text-sm text-center px-2 [@media(max-height:720px)]:hidden">Escolha como quer embaralhar:</span>
-          <div className="flex gap-1.5 sm:gap-3 flex-wrap justify-center px-2">
-            {[
-              { type: "cut" as ShuffleType, label: "✂️ Cortar", desc: "Divide ao meio" },
-              { type: "riffle" as ShuffleType, label: "🎴 Riffle", desc: "Entrelaçar" },
-              { type: "overhand" as ShuffleType, label: "🤌 Pilha", desc: "Mover por cima" },
-              { type: "lucas" as ShuffleType, label: "👑 Supremo do Lucas", desc: "Não embaralha nada" },
-            ].map(({ type, label, desc }) => (
-              <motion.button key={type} whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}
-                onHoverStart={() => !confirmed && setPreview(type)}
-                onHoverEnd={() => !confirmed && setPreview(null)}
-                onClick={() => handlePick(type)}
-                disabled={!!confirmed}
-                className={`flex flex-col items-center gap-0.5 sm:gap-1 bg-zinc-900 border px-2.5 py-2 sm:px-5 sm:py-3 rounded-lg sm:rounded-xl transition-all text-white w-[76px] sm:w-auto disabled:opacity-40 ${
-                  confirmed === type
-                    ? "border-yellow-400 shadow-[0_0_16px_rgba(250,204,21,0.4)]"
-                    : type === "lucas"
-                    ? "border-yellow-600 hover:border-yellow-400 hover:bg-yellow-900/20"
-                    : "border-zinc-700 hover:border-red-500 hover:bg-red-900/20"
-                }`}>
-                <span className="text-lg sm:text-2xl">{label.split(" ")[0]}</span>
-                <span className="font-bold text-[10px] sm:text-sm text-center leading-tight">{label.split(" ").slice(1).join(" ")}</span>
-                <span className="text-zinc-500 text-[9px] sm:text-xs hidden sm:[@media(min-height:721px)]:block">{desc}</span>
-              </motion.button>
-            ))}
-          </div>
-          <div className="[@media(max-height:720px)]:hidden">
-            <AnimatePresence mode="wait">
-              {preview && <DeckAnimation type={preview} key={preview} />}
-            </AnimatePresence>
-          </div>
-        </>
-      ) : (
-        <div className="flex flex-col items-center gap-3">
-          <motion.div animate={{ rotate: [0, 10, -10, 0] }} transition={{ repeat: Infinity, duration: 1.5 }}
-            className="text-5xl">🃏</motion.div>
-          <span className="text-white font-bold text-center">{dealerName} está embaralhando...</span>
-        </div>
-      )}
-    </motion.div>
-  );
-}
-
-function DeckAnimation({ type }: { type: ShuffleType }) {
-  const cards = [0, 1, 2, 3, 4];
-  if (type === "cut") {
-    return (
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        className="flex gap-8 h-20 items-end">
-        {[cards.slice(0, 3), cards.slice(3)].map((half, hi) => (
-          <motion.div key={hi} className="relative flex"
-            animate={{ x: hi === 0 ? -10 : 10 }} transition={{ type: "spring", stiffness: 200 }}>
-            {half.map((_, i) => (
-              <div key={i} className="w-8 h-12 bg-gradient-to-br from-red-700 to-red-900 border border-red-500 rounded-sm shadow absolute"
-                style={{ bottom: i * 2, left: i * 0.5 }} />
-            ))}
-          </motion.div>
-        ))}
-      </motion.div>
-    );
-  }
-  if (type === "riffle") {
-    return (
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        className="relative flex h-20 items-end w-32 justify-center">
-        {cards.map((_, i) => (
-          <motion.div key={i}
-            className="absolute w-8 h-12 bg-gradient-to-br from-red-700 to-red-900 border border-red-500 rounded-sm shadow"
-            animate={{ rotate: [0, i % 2 === 0 ? 20 : -20, 0], x: [0, i % 2 === 0 ? -12 : 12, 0] }}
-            transition={{ duration: 0.8, delay: i * 0.05, repeat: Infinity, repeatDelay: 0.5 }}
-            style={{ bottom: i * 2 }} />
-        ))}
-      </motion.div>
-    );
-  }
-  if (type === "lucas") {
-    return (
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        className="relative flex flex-col items-center h-20 justify-end w-32">
-        <motion.span className="text-2xl mb-1"
-          animate={{ y: [0, -6, 0], rotate: [0, -8, 8, 0] }}
-          transition={{ duration: 1, repeat: Infinity }}>
-          👑
-        </motion.span>
-        <div className="relative w-8 h-12">
-          {cards.map((_, i) => (
-            <div key={i}
-              className="absolute w-8 h-12 bg-gradient-to-br from-yellow-600 to-yellow-800 border border-yellow-400 rounded-sm shadow"
-              style={{ bottom: i * 1.5, left: i * 1.5 }} />
-          ))}
-        </div>
-      </motion.div>
-    );
-  }
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="relative flex h-20 items-end w-32 justify-center">
-      {cards.map((_, i) => (
-        <motion.div key={i}
-          className="absolute w-8 h-12 bg-gradient-to-br from-red-700 to-red-900 border border-red-500 rounded-sm shadow"
-          animate={{ y: [0, -20, 0], x: [0, 8, 0] }}
-          transition={{ duration: 0.5, delay: i * 0.1, repeat: Infinity, repeatDelay: 0.6 }}
-          style={{ bottom: i * 2, left: i * 2 }} />
-      ))}
-    </motion.div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PLAYING CARD
-// ─────────────────────────────────────────────────────────────────────────────
-// Cada tema pode ter mais de uma imagem de verso — a carta N da mão usa
-// images[N % images.length], ou seja, alterna: 1ª carta pega a 1ª imagem, 2ª
-// carta pega a 2ª, e assim por diante, repetindo do início quando acabam.
-const CARD_BACKS: Record<string, string[]> = {
-  candy: ["/themes/card_back_candy.jpg"],
-  adventure: ["/themes/card_back_adventure.jpg"],
-  pedro: ["/themes/card_back_pedro.png"],
-  aquarium: ["/themes/card_back_aquarium.jpg"],
-  lotr: ["/themes/card_back_lotr.jpg"],
-  mpb: ["/themes/card_back_mpb.jpg"],
-  lgbt: ["/themes/card_back_lgbt.jpg"],
-  olivia: ["/themes/card_back_olivia_1.png", "/themes/card_back_olivia_2.png", "/themes/card_back_olivia_3.jpg"],
-  gatos: ["/themes/card_back_gatos_1.jpg", "/themes/card_back_gatos_2.jpg"],
-  mamadores: ["/themes/card_back_mamadores_1.jpg", "/themes/card_back_mamadores_2.jpg"],
-  jessie: ["/themes/card_back_jessie_1.jpg"],
-};
-
-// Fundo da mesa (a "vaza"), mesma imagem de fundo do tema — só recortada em círculo.
-const TABLE_BG: Record<string, string> = {
-  candy: "/themes/bg_candy.jpg",
-  adventure: "/themes/bg_adventure.jpg",
-  pedro: "/themes/bg_pedro.jpg",
-  aquarium: "/themes/bg_aquarium.jpg",
-  lotr: "/themes/bg_lotr.jpg",
-  mpb: "/themes/bg_mpb.jpg",
-  lgbt: "/themes/bg_lgbt.jpg",
-  olivia: "/themes/bg_olivia.png",
-  gatos: "/themes/bg_gatos.jpg",
-  mamadores: "/themes/bg_mamadores.jpg",
-  jessie: "/themes/bg_jessie.jpg",
-};
-
-const CARD_BORDERS: Record<string, [string, string]> = {
-  aquarium: ["border-red-400", "border-cyan-400"],
-  candy: ["border-pink-400", "border-purple-400"],
-  adventure: ["border-orange-400", "border-green-500"],
-  pedro: ["border-yellow-400", "border-zinc-400"],
-  lotr: ["border-amber-500", "border-stone-400"],
-  mpb: ["border-orange-600", "border-teal-600"],
-  lgbt: ["border-rose-500", "border-indigo-500"],
-  olivia: ["border-orange-400", "border-amber-700"],
-  gatos: ["border-purple-400", "border-slate-500"],
-  mamadores: ["border-red-400", "border-yellow-500"],
-  jessie: ["border-rose-400", "border-pink-600"],
-};
-
-function PlayingCard({
-  card,
-  hidden = false,
-  theme = "aquarium",
-  backIndex = 0,
-}: {
-  card: GameCard;
-  hidden?: boolean;
-  theme?: string;
-  // Posição da carta na mão (0 = 1ª carta) — decide qual verso mostrar, quando
-  // o tema tem mais de uma imagem de verso (ver CARD_BACKS acima).
-  backIndex?: number;
-}) {
-  if (hidden) {
-    const backs = CARD_BACKS[theme] ?? CARD_BACKS.aquarium;
-    const back = backs[backIndex % backs.length];
-    return (
-      <div
-        className="w-[4.32rem] h-[5.76rem] sm:w-[7.2rem] sm:h-[10.08rem] rounded-lg sm:rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.6)] border-2 border-white/20 bg-cover bg-center overflow-hidden select-none"
-        style={{ backgroundImage: `url(${back})` }}
-      />
-    );
-  }
-
-  const isRed = card.suit === "hearts" || card.suit === "diamonds";
-  const Icon = { hearts: Heart, spades: Spade, diamonds: Diamond, clubs: Club }[card.suit];
-  const [redBorder, blackBorder] = CARD_BORDERS[theme] ?? CARD_BORDERS.aquarium;
-
-  return (
-    <div
-      className={`w-[4.32rem] h-[5.76rem] sm:w-[7.2rem] sm:h-[10.08rem] bg-white/96 backdrop-blur-sm rounded-lg sm:rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.5)] flex flex-col justify-between p-1.5 sm:p-2.5 border-2 ${isRed ? redBorder : blackBorder} ${isRed ? "text-red-600" : "text-zinc-900"} select-none`}>
-      <div className="text-sm sm:text-[1.35rem] font-bold leading-none">{card.value}</div>
-      <div className="flex-1 flex items-center justify-center">
-        <Icon className="w-6 h-6 sm:w-12 sm:h-12 fill-current" />
-      </div>
-      <div className="text-sm sm:text-[1.35rem] font-bold leading-none rotate-180">{card.value}</div>
-    </div>
   );
 }

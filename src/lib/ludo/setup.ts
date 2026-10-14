@@ -1,7 +1,7 @@
 // "Eu contra N bots": em vez de rodar no navegador, é uma sala comum do room
 // server (como o Modo Teste da Fodinha) — o dono da sala só manda, logo que
 // ela nasce, as mesmas mensagens que mandaria na mão: escolher a cor, trazer
-// os bots e começar. Assim o servidor joga pelos bots e, se o PartyKit cair,
+// os bots e começar. Assim o servidor joga pelos bots e, se o servidor de jogo cair,
 // a pessoa percebe na hora (a sala não conecta).
 
 import { COLORS, LudoColor } from "./board";

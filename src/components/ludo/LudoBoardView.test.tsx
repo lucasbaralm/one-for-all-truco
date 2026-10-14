@@ -37,6 +37,7 @@ const viewOf = (state: LudoState, over: Partial<AnimatedView> = {}): AnimatedVie
   diceKey: 0,
   busy: false,
   effects: [],
+  trail: null,
   ...over,
 });
 
@@ -62,17 +63,19 @@ function render(over: { state?: LudoState; view?: Partial<AnimatedView>; myColor
   );
 }
 const count = (html: string, re: RegExp) => (html.match(re) ?? []).length;
+/** Peões de verdade no tabuleiro (os "fantasmas" dos destinos têm o mesmo desenho, mas não contam). */
+const pawns = (html: string) => count(html, /viewBox="0 0 40 52"/g) - count(html, /data-ghost/g);
 /** Índices (0..3) das peças clicáveis: o rótulo de acessibilidade é "Mover peça N" com N de 1 a 4. */
 const movable = (html: string) => [...html.matchAll(/aria-label="Mover peça (\d)"/g)].map((m) => Number(m[1]) - 1);
 
 describe("LudoBoardView", () => {
   it("desenha as 16 peças (4 jogadores × 4), mesmo as que ainda estão na base", () => {
-    expect(count(render(), /viewBox="0 0 40 52"/g)).toBe(16);
+    expect(pawns(render())).toBe(16);
   });
 
   it("só 2 jogadores? 8 peças", () => {
     const two = game({ red: [10, IN_BASE, IN_BASE, IN_BASE], blue: [IN_BASE, IN_BASE, IN_BASE, IN_BASE] }, 3);
-    expect(count(render({ state: two }), /viewBox="0 0 40 52"/g)).toBe(8);
+    expect(pawns(render({ state: two }))).toBe(8);
   });
 
   it("minhas peças que podem andar viram botões, cada uma com seu destino marcado", () => {
@@ -108,6 +111,33 @@ describe("LudoBoardView", () => {
     expect(render()).not.toContain("💥");
   });
 
+  it("o peão em si nunca recebe mouse (só o botão da peça movível) e a peça que posso mover fica acima das outras da casa", () => {
+    const html = render();
+    // um wrapper por peão (16), todos sem eventos de mouse; os botões (2 movíveis) é que aceitam clique
+    expect(count(html, /class="pointer-events-none absolute left-0 top-0"/g)).toBe(16);
+    expect(count(html, /pointer-events-auto/g)).toBe(2);
+    // as peças movíveis (z 35) ficam acima das demais peças paradas (z 10 + linha)
+    const z = [...html.matchAll(/class="pointer-events-none absolute left-0 top-0" style="[^"]*z-index:(\d+)/g)].map((m) => Number(m[1]));
+    expect(z.filter((n) => n === 35)).toHaveLength(2);
+    expect(Math.max(...z.filter((n) => n !== 35 && n !== 40))).toBeLessThan(35);
+  });
+
+  it("cada destino possível mostra a peça 'fantasma' que ficaria lá — e nada disso durante animação", () => {
+    expect(count(render(), /data-ghost/g)).toBe(2);
+    expect(count(render({ view: { busy: true } }), /data-ghost/g)).toBe(0);
+    expect(count(render({ myColor: null }), /data-ghost/g)).toBe(0);
+  });
+
+  it("rastro da última jogada: desenhado quando existe, ausente quando não", () => {
+    const trail = { id: 1, color: "red" as const, drawMs: 640, points: [{ x: 6.5, y: 13.5 }, { x: 6.5, y: 12.5 }, { x: 6.5, y: 11.5 }] };
+    const html = render({ view: { trail } });
+    expect(count(html, /<polyline/g)).toBe(2); // contorno branco + traço colorido
+    expect(count(html, /<circle/g)).toBeGreaterThanOrEqual(2); // origem e destino
+    expect(count(render(), /<polyline/g)).toBe(0);
+    // com um ponto só não há o que desenhar
+    expect(count(render({ view: { trail: { ...trail, points: [trail.points[0]] } } }), /<polyline/g)).toBe(0);
+  });
+
   it("realça a base de quem tem a vez (e só ela)", () => {
     expect(count(render({ activeColor: "red" }), /ludo-base-pulse/g)).toBe(1);
     expect(count(render({ activeColor: null }), /ludo-base-pulse/g)).toBe(0);
@@ -118,7 +148,7 @@ describe("LudoBoardView", () => {
     for (const rotation of [1, 2, 3]) {
       const turned = render({ rotation });
       expect(turned).not.toBe(base);
-      expect(count(turned, /viewBox="0 0 40 52"/g)).toBe(16);
+      expect(pawns(turned)).toBe(16);
       expect(movable(turned)).toEqual(movable(base));
     }
   });

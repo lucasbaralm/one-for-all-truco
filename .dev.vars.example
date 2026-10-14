@@ -1,0 +1,5 @@
+# Variáveis do Worker dos room servers em DESENVOLVIMENTO (`npm run party:dev`).
+# Copie para `.dev.vars` (ignorado pelo git) e preencha com o mesmo projeto Supabase do .env.local.
+# Em produção elas são secrets do Worker: `npx wrangler secret put SUPABASE_URL` e `... SUPABASE_ANON_KEY`.
+SUPABASE_URL=https://<seu-projeto>.supabase.co
+SUPABASE_ANON_KEY=<anon key>

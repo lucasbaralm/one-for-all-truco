@@ -1,0 +1,42 @@
+// Palavras da Forca (com acento, como se escreve) e a categoria que aparece como dica.
+// Uma palavra por vez, só letras — o acento só aparece na tela quando a letra é revelada
+// (o jogo compara pela letra SEM acento: chutar "A" revela o "Ã" de "AVIÃO").
+
+export interface WordEntry {
+  word: string;
+  category: string;
+}
+
+const LISTS: Record<string, string> = {
+  Animal:
+    "ELEFANTE GIRAFA CACHORRO GOLFINHO TARTARUGA BORBOLETA CROCODILO PAPAGAIO CAVALO PINGUIM JACARÉ MACACO COELHO TUBARÃO SERPENTE FORMIGA COBRA LEÃO ZEBRA CAMELO ÁGUIA URSO BALEIA ARARA",
+  Fruta:
+    "MORANGO ABACAXI MELANCIA BANANA LARANJA MAÇÃ UVA MANGA GOIABA MARACUJÁ PÊSSEGO CEREJA LIMÃO ABACATE JABUTICABA CAJU AMORA PITANGA COCO MELÃO",
+  País: "BRASIL ARGENTINA PORTUGAL JAPÃO ESPANHA ALEMANHA ITÁLIA CANADÁ MÉXICO URUGUAI CHILE FRANÇA EGITO RÚSSIA ÍNDIA PERU COLÔMBIA ANGOLA AUSTRÁLIA SUÉCIA",
+  Profissão:
+    "MÉDICO PROFESSOR BOMBEIRO PADEIRO ENGENHEIRO DENTISTA MOTORISTA JORNALISTA PROGRAMADOR ADVOGADO PINTOR COZINHEIRO CARTEIRO FAZENDEIRO ARQUITETO PILOTO ATOR CIENTISTA MÚSICO GARÇOM",
+  Comida:
+    "FEIJOADA BRIGADEIRO PIZZA HAMBÚRGUER LASANHA COXINHA PAMONHA TAPIOCA SORVETE PIPOCA MACARRÃO CHURRASCO PASTEL OMELETE BOLO QUEIJO SANDUÍCHE ACARAJÉ FAROFA PUDIM",
+  Objeto:
+    "CADEIRA TELEFONE GELADEIRA COMPUTADOR ESPELHO TESOURA MOCHILA RELÓGIO LANTERNA VENTILADOR TRAVESSEIRO CHAVEIRO LIVRO CANETA VIOLÃO ÓCULOS ESCOVA GARRAFA MARTELO CORTINA",
+  Esporte:
+    "FUTEBOL VOLEIBOL NATAÇÃO BASQUETE CICLISMO ATLETISMO TÊNIS BOXE JUDÔ GINÁSTICA SURFE PATINAÇÃO CAPOEIRA HANDEBOL ESGRIMA CORRIDA MARATONA ARCO SKATE BEISEBOL",
+  Natureza:
+    "MONTANHA CACHOEIRA FLORESTA VULCÃO TEMPESTADE DESERTO OCEANO PLANETA ESTRELA FURACÃO PRAIA RELÂMPAGO GELEIRA SELVA LAGO CAVERNA NEBLINA PLANÍCIE TROVÃO ILHA",
+};
+
+export const WORDS: readonly WordEntry[] = Object.entries(LISTS).flatMap(([category, words]) => words.split(" ").map((word) => ({ word, category })));
+
+export const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+/** Letras mais comuns em português, da mais pra menos frequente (desempate dos bots). */
+export const LETTER_ORDER = "AEOSRIDNMTCULPVGQBFHZJXKWY";
+
+/** "avião" → "AVIAO": maiúsculas, sem acento, só A–Z (o resto é descartado). */
+export function normalize(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z]/g, "");
+}

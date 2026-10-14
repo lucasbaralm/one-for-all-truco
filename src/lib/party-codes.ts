@@ -1,5 +1,5 @@
 // Códigos de fechamento da conexão com os room servers (além dos padrões do
-// WebSocket) — compartilhados por todos os jogos que usam o PartyKit.
+// WebSocket) — compartilhados por todos os jogos que usam o PartyServer.
 
 /** O servidor validou o token e recusou: login vencido/inválido, ou nome que não bate. */
 export const UNAUTHORIZED_CLOSE_CODE = 4001;
