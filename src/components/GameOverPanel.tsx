@@ -46,11 +46,13 @@ export function GameOverPanel({ headline, rows, myStats = [], actions }: GameOve
     <>
       {win && <Confetti />}
       <motion.div
-        className="fixed inset-0 z-[65] flex items-center justify-center bg-black/75 p-4"
+        className="fixed inset-0 z-[65] overflow-y-auto bg-black/75 p-4"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
       >
+        {/* centralizado quando cabe; quando a tela é baixa o painel rola inteiro (os botões nunca ficam fora de alcance) */}
+        <div className="flex min-h-full items-center justify-center">
         <motion.div
           className="w-full max-w-md rounded-3xl border bg-zinc-900 p-6 text-center shadow-2xl"
           style={{ borderColor: win ? "rgba(250,204,21,0.55)" : "rgb(63 63 70)" }}
@@ -118,6 +120,7 @@ export function GameOverPanel({ headline, rows, myStats = [], actions }: GameOve
             )}
           </div>
         </motion.div>
+        </div>
       </motion.div>
     </>
   );

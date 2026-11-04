@@ -1,4 +1,4 @@
-# Fodinha, Ludo, Dobble, Uno & Forca
+# Fodinha, Ludo, Dobble, Uno, Forca & Mímica
 
 Jogos de mesa multiplayer em Next.js + PartyServer (Cloudflare Workers/Durable Objects) + Supabase (login). Depois do login,
 `/lobby` é o menu onde se escolhe o jogo:
@@ -10,30 +10,33 @@ Jogos de mesa multiplayer em Next.js + PartyServer (Cloudflare Workers/Durable O
 | Dobble (Spot It!) | `/lobby/dobble` | `/dobble/[sala]` (binding `Dobble`, `party/dobble.ts`) |
 | Uno | `/lobby/uno` | `/uno/[sala]` (binding `Uno`, `party/uno.ts`) |
 | Forca | `/lobby/forca` | `/forca/[sala]` (binding `Forca`, `party/forca.ts`) |
+| Mímica Love Songs | `/lobby/mimica` | `/mimica/[sala]` (binding `Mimica`, `party/mimica.ts`) |
 
 Ludo, Dobble, Uno e Forca têm "Contra Bots": é uma sala comum do servidor com a URL
 `?bots=3&level=hard&color=red` (Ludo), `?bots=3&level=hard&mode=tower` (Dobble), `?bots=3&level=hard` (Uno) ou
 `?bots=3&level=hard&rounds=5` (Forca) — o dono da sala monta e começa a partida sozinho, e o servidor joga
 pelos bots (como o Modo Teste da Fodinha).
+A **Mímica Love Songs** não tem bots, e a call é do próprio jogo: videochamada WebRTC dentro da sala (ver
+[Videochamada](#videochamada-mímica)).
 
 ## Rodando
 
 ```bash
 cp .dev.vars.example .dev.vars   # uma vez: SUPABASE_URL e SUPABASE_ANON_KEY do Worker (mesmo projeto do .env.local)
 npm run dev            # Next em :3000
-npm run party:dev      # room servers (Fodinha + Ludo + Dobble + Uno + Forca) em :1999 — `wrangler dev`
+npm run party:dev      # room servers (Fodinha + Ludo + Dobble + Uno + Forca + Mímica) em :1999 — `wrangler dev`
 npm test               # vitest
 npm run typecheck:worker   # tipos do Worker (o `tsc` da raiz é o do navegador)
 ```
 
-Os cinco jogos rodam no MESMO Worker (`worker/index.ts`, configurado em `wrangler.jsonc`): um Durable Object
+Os seis jogos rodam no MESMO Worker (`worker/index.ts`, configurado em `wrangler.jsonc`): um Durable Object
 por jogo, uma instância por sala. O nome do binding é o segmento da URL (`/parties/ludo/ABCD`), então o código de
 sala de um jogo nunca colide com o de outro. O cliente acha o Worker por `NEXT_PUBLIC_PARTY_HOST`
 (o nome antigo `NEXT_PUBLIC_PARTYKIT_HOST` ainda vale como reserva).
 
 ## Como é feito
 
-Ludo, Dobble, Uno e Forca seguem o mesmo molde: regras como funções puras → controlador (permissões + o que
+Ludo, Dobble, Uno, Forca e Mímica seguem o mesmo molde: regras como funções puras → controlador (permissões + o que
 acontece sozinho) → room server fino → telas.
 
 - `src/lib/<jogo>/engine.ts` — regras puras. Ludo: sair da base com 6, capturas, casas seguras,
@@ -41,7 +44,14 @@ acontece sozinho) → room server fino → telas.
   ordem 7 — duas cartas quaisquer têm UM símbolo em comum), modos Torre e Poço, castigo por erro. Uno: 108 cartas,
   Pular/Inverter/+2/Coringa/+4 (o +4 só sem a cor atual na mão — o servidor confere), comprar e jogar, gritar UNO e
   ser pego por quem viu. Forca: o servidor sorteia a palavra (com categoria de dica), vidas compartilhadas, a vez
-  passa a cada chute, chute da palavra inteira custa 2 vidas se errar, 25 s por jogada com chute automático.
+  passa a cada chute, chute da palavra inteira custa 2 vidas se errar, 25 s por jogada com chute automático. Mímica (2 a 8 pessoas): a cada turno
+  uma pessoa recebe uma carta de 4 músicas — 3 do Brasil e 1 internacional, sorteadas de 600 (300 do Brasil e 300 do mundo dos últimos ~40 anos — muita MPB e rock nacional,
+  pagode, axé, sertanejo, hits dos anos 80/90/2000 e de hoje —, curadas por década e conferidas nos totais do Spotify; veja o
+  cabeçalho de `src/lib/mimica/songs.ts` pra como foram escolhidas e como trocar uma) — e escolhe uma em 25 s; faz a mímica por 90 s enquanto as outras
+  digitam o título (sem acento nem pontuação, com perdão de um errinho — mas nunca o título de OUTRA música do catálogo);
+  acerta o primeiro: valor da música (10 Brasil / 15 mundo) + 1 a 5 pela rapidez, e quem fez a mímica leva o valor; na metade
+  do tempo aparece a primeira letra de cada palavra; quem faz a mímica pode aceitar um chute que o servidor recusou. Não existe a
+  carta "faixa extra" do jogo de caixa.
 - `src/lib/<jogo>/controller.ts` — aplica as ações dos jogadores com permissões (host, vez) e dirige o
   que acontece sozinho: bots, passar a vez, contagem regressiva, segurar a rodada ganha na mesa
   (como a vaza da Fodinha). Tempos em `timing.ts`.
@@ -89,6 +99,30 @@ acontece sozinho) → room server fino → telas.
   da soma das apostas, aviso do número bloqueado, "+N 💀" subindo no placar. Uno: quantas cartas cada um tem (com "+1"
   subindo), botão UNO!/PEGAR!. Forca: "+N" nos pontos, tecla marcada com a cor de quem chutou.
 
+## Videochamada (Mímica)
+
+A Mímica tem videochamada dentro da sala (`src/lib/call/`, `src/components/call/`), em malha WebRTC: cada par de pessoas
+tem UMA conexão direta de vídeo e áudio. O servidor da sala só repassa a **sinalização** (oferta, resposta, candidatos ICE) —
+mensagens `rtc` que `GameRoom` entrega só entre quem está na mesa (`supportsCall()`; quem só assiste fica de fora) — o vídeo
+não passa por ele.
+
+- `engine.ts` é o motor (TypeScript puro, testado com conexões de mentira): quem entra manda `hello`, quem já estava responde,
+  e **só o lado de menor id oferece** (nunca duas ofertas ao mesmo tempo); quem recarrega manda `hello` de novo e a conexão é refeita.
+  `useCall.ts` é o hook (câmera, microfone, estado). Pra pessoa sem câmera ou com a permissão negada a chamada segue "só assistindo"
+  (ela ainda **recebe** o vídeo de quem faz a mímica).
+- Quem faz a mímica sobe o vídeo em qualidade maior (`bitrate.ts`: ≈4 Mbps de upload repartidos entre as conexões, contra ≈0,9 Mbps
+  dos outros) e fica com o **microfone cortado** durante a mímica (regra: sem som). Como é malha, o upload de cada um cresce com a
+  mesa: com 8 pessoas todas de câmera ligada, a internet de casa sofre — desligar a câmera de quem só chuta alivia.
+- **STUN** (de graça) resolve a maioria das redes. Pra redes fechadas (4G, Wi-Fi de empresa, NAT rígido) é preciso **TURN**, que
+  retransmite o vídeo e custa banda. Variáveis de ambiente do **Next** (só no servidor — a rota `POST /api/turn` exige login e
+  entrega credenciais temporárias, nada vai embutido no navegador):
+  - Cloudflare Realtime TURN: `CLOUDFLARE_TURN_KEY_ID` e `CLOUDFLARE_TURN_API_TOKEN` (credenciais de 24 h por pessoa; cobrança por GB
+    retransmitido — confira o preço atual);
+  - ou qualquer TURN (coturn, Metered, Twilio...): `TURN_URLS` (separadas por vírgula), `TURN_USERNAME`, `TURN_CREDENTIAL`.
+  Sem nenhuma das duas a chamada usa só STUN, e a tela da sala avisa que não há retransmissão.
+- Câmera e microfone só liberam em páginas seguras: `https` ou `localhost`. Abrir o site pelo IP da rede local (`http://192.168...`)
+  no celular **não** libera a câmera — a pessoa entra só assistindo, com um aviso em português.
+
 ## Avisos de serviço fora do ar
 
 O menu de jogos (`/lobby/*`) e a tela de login conferem, a cada 15s, se o servidor de jogo
@@ -117,9 +151,9 @@ Um novo jogo com salas herda de `GameRoom` (`party/game-room.ts`) e ganha o cont
 
 ## Teste ponta a ponta
 
-Os room servers aceitam `LUDO_SPEED` / `DOBBLE_SPEED` / `UNO_SPEED` / `FORCA_SPEED` (dividem todas as esperas dos bots e
+Os room servers aceitam `LUDO_SPEED` / `DOBBLE_SPEED` / `UNO_SPEED` / `FORCA_SPEED` / `MIMICA_SPEED` (dividem todas as esperas dos bots e
 das animações; em produção não existem) pra partidas inteiras rodarem em minutos:
-`npx wrangler dev --port 1999 --var LUDO_SPEED:8 --var DOBBLE_SPEED:8 --var UNO_SPEED:8 --var FORCA_SPEED:8`
+`npx wrangler dev --port 1999 --var LUDO_SPEED:8 --var DOBBLE_SPEED:8 --var UNO_SPEED:8 --var FORCA_SPEED:8 --var MIMICA_SPEED:8`
 (um Supabase de mentira também entra por aqui: `--var SUPABASE_URL:http://localhost:4010`, que vale mais que o `.dev.vars`).
 
 ## Deploy do servidor de jogo (Cloudflare)
@@ -138,7 +172,7 @@ Depois, na Vercel, defina `NEXT_PUBLIC_PARTY_HOST=fodinha-party.<subdominio>.wor
 um novo deploy do Next (variáveis `NEXT_PUBLIC_*` são embutidas no build). O PartyKit antigo continua de pé até
 você apagá-lo, então voltar atrás é só restaurar a variável. Nada de dados a migrar: as salas são efêmeras e o
 histórico fica no Supabase. Ao adicionar um jogo novo: classe em `worker/index.ts`, binding em `wrangler.jsonc` e uma
-migração NOVA (`v2`...) listando a classe — nunca edite a `v1` depois do deploy.
+migração NOVA (`v2`...) listando a classe — nunca edite a `v1` depois do deploy. A `Mimica` já está na `v2`; o próximo jogo vai na `v3`.
 
 ---
 

@@ -164,6 +164,28 @@ function ForcaArt() {
   );
 }
 
+function MimicaArt() {
+  return (
+    <div className="relative flex h-32 items-center justify-center">
+      <motion.svg viewBox="0 0 100 100" className="h-28 w-28 drop-shadow-xl" animate={{ rotate: 360 }} transition={{ duration: 8, repeat: Infinity, ease: "linear" }}>
+        <circle cx="50" cy="50" r="46" fill="#18181b" />
+        {[38, 30, 22].map((r) => (
+          <circle key={r} cx="50" cy="50" r={r} fill="none" stroke="#3f3f46" strokeWidth="1" />
+        ))}
+        <circle cx="50" cy="50" r="15" fill="#ec4899" />
+        <circle cx="50" cy="50" r="2.5" fill="#18181b" />
+        <path d="M18 30 A38 38 0 0 1 40 14" stroke="rgba(255,255,255,.35)" fill="none" strokeWidth="2" strokeLinecap="round" />
+      </motion.svg>
+      <motion.span className="absolute -right-1 -top-1 text-3xl" animate={{ y: [0, -8, 0], rotate: [0, 12, -8, 0] }} transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}>
+        🎭
+      </motion.span>
+      <motion.span className="absolute left-2 top-3 text-2xl" animate={{ y: [0, -6, 0], opacity: [0.6, 1, 0.6] }} transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}>
+        🎵
+      </motion.span>
+    </div>
+  );
+}
+
 function GameCard({
   href,
   title,
@@ -230,7 +252,7 @@ function GameCard({
 }
 
 export default function GameMenu() {
-  // Os três jogos dependem do servidor de jogo e do Supabase (quem é você): se um cair, nenhum conecta.
+  // Os jogos dependem do servidor de jogo e do Supabase (quem é você): se um cair, nenhum conecta.
   const { party, supabase } = useServiceStatus();
   const offline = party === "down" ? "Servidor offline" : supabase === "down" ? "Supabase offline" : null;
   return (
@@ -246,7 +268,7 @@ export default function GameMenu() {
           <ProfileHeader />
         </div>
 
-        {/* 6 colunas: três cartões na primeira linha e os outros dois centralizados na segunda */}
+        {/* 6 colunas: três cartões por linha */}
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-6">
           <GameCard
             href="/lobby/fodinha"
@@ -290,7 +312,7 @@ export default function GameMenu() {
             art={<UnoArt />}
             delay={0.35}
             offline={offline}
-            className="lg:col-span-2 lg:col-start-2"
+            className="lg:col-span-2"
           />
           <GameCard
             href="/lobby/forca"
@@ -300,6 +322,17 @@ export default function GameMenu() {
             accent="#10b981"
             art={<ForcaArt />}
             delay={0.45}
+            offline={offline}
+            className="lg:col-span-2"
+          />
+          <GameCard
+            href="/lobby/mimica"
+            title="Mímica Love Songs"
+            tagline="Faça a mímica de uma música da carta e a galera adivinha o título — com videochamada dentro do jogo."
+            chips={["2–8 jogadores", "Online", "Videochamada"]}
+            accent="#ec4899"
+            art={<MimicaArt />}
+            delay={0.55}
             offline={offline}
             className="lg:col-span-2"
           />
