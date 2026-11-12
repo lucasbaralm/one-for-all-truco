@@ -1,9 +1,9 @@
 // Todos os jogos gravam na mesma tabela match_history; o prefixo do room_id é
 // o que separa um do outro (party/ludo.ts, party/dobble.ts...). Sem prefixo = Fodinha.
 
-export type Game = "fodinha" | "ludo" | "dobble" | "uno" | "forca";
+export type Game = "fodinha" | "ludo" | "dobble" | "uno" | "forca" | "mimica";
 
-export const HISTORY_PREFIX: Record<Exclude<Game, "fodinha">, string> = { ludo: "LUDO:", dobble: "DOBBLE:", uno: "UNO:", forca: "FORCA:" };
+export const HISTORY_PREFIX: Record<Exclude<Game, "fodinha">, string> = { ludo: "LUDO:", dobble: "DOBBLE:", uno: "UNO:", forca: "FORCA:", mimica: "MIMICA:" };
 
 /** Os jogos com prefixo (todos menos a Fodinha). */
 export const PREFIXED_GAMES = Object.keys(HISTORY_PREFIX) as Exclude<Game, "fodinha">[];
@@ -32,6 +32,6 @@ export function describeResult(game: Game, p: Summary): string {
     return p.mode === "well" ? `${p.name} (${p.score === 0 ? "acabou" : `faltavam ${p.score}`})` : `${p.name} (${p.score} ${p.score === 1 ? "carta" : "cartas"})`;
   }
   if (game === "uno") return `${p.name} (${p.score === 0 ? "zerou a mão" : `${p.score} ${p.score === 1 ? "carta" : "cartas"}`})`;
-  if (game === "forca") return `${p.name} (${p.score} pts)`;
+  if (game === "forca" || game === "mimica") return `${p.name} (${p.score} pts)`;
   return `${p.name} (${p.score})`;
 }

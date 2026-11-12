@@ -15,11 +15,15 @@
       { "name": "Ludo", "class_name": "Ludo" },
       { "name": "Dobble", "class_name": "Dobble" },
       { "name": "Uno", "class_name": "Uno" },
-      { "name": "Forca", "class_name": "Forca" }
+      { "name": "Forca", "class_name": "Forca" },
+      { "name": "Mimica", "class_name": "Mimica" }
     ]
   },
   // Cada classe nova entra numa migração nova (v2, v3...) — nunca edite a v1 depois do deploy.
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Main", "Ludo", "Dobble", "Uno", "Forca"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Main", "Ludo", "Dobble", "Uno", "Forca"] },
+    { "tag": "v2", "new_sqlite_classes": ["Mimica"] }
+  ],
 
   // SUPABASE_URL e SUPABASE_ANON_KEY NÃO ficam aqui:
   //   • local: arquivo .dev.vars (modelo em .dev.vars.example);

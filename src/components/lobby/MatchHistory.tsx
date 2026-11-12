@@ -12,6 +12,7 @@ const BADGE: Record<Game, { label: string; className: string }> = {
   dobble: { label: "Dobble", className: "bg-indigo-500/20 text-indigo-300" },
   uno: { label: "Uno", className: "bg-yellow-500/20 text-yellow-300" },
   forca: { label: "Forca", className: "bg-emerald-500/20 text-emerald-300" },
+  mimica: { label: "Mímica", className: "bg-pink-500/20 text-pink-300" },
 };
 
 interface MatchRow {

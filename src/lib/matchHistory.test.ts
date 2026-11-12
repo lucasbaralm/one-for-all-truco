@@ -8,6 +8,7 @@ describe("histórico de partidas: de que jogo é cada linha", () => {
     expect(gameOf("DOBBLE:XY12")).toBe("dobble");
     expect(gameOf("UNO:K3K3")).toBe("uno");
     expect(gameOf("FORCA:ZZ99")).toBe("forca");
+    expect(gameOf("MIMICA:ZZ99")).toBe("mimica");
     expect(gameOf("ABCD")).toBe("fodinha");
     // "LUDO" sem os dois pontos não é Ludo (um código de sala de Fodinha pode ser LUDO)
     expect(gameOf("LUDO")).toBe("fodinha");
@@ -18,6 +19,7 @@ describe("histórico de partidas: de que jogo é cada linha", () => {
     expect(roomCodeOf("DOBBLE:ZZZZZZ")).toBe("ZZZZZZ");
     expect(roomCodeOf("UNO:ABCD")).toBe("ABCD");
     expect(roomCodeOf("FORCA:ABCD")).toBe("ABCD");
+    expect(roomCodeOf("MIMICA:ABCD")).toBe("ABCD");
     expect(roomCodeOf("ABCD")).toBe("ABCD");
   });
 });

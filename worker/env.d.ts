@@ -6,6 +6,7 @@ declare namespace Cloudflare {
     Dobble: DurableObjectNamespace;
     Uno: DurableObjectNamespace;
     Forca: DurableObjectNamespace;
+    Mimica: DurableObjectNamespace;
     SUPABASE_URL: string;
     SUPABASE_ANON_KEY: string;
     // Só os testes ponta a ponta definem estas (wrangler dev --var UNO_SPEED:8): dividem as esperas dos bots.
@@ -13,5 +14,6 @@ declare namespace Cloudflare {
     DOBBLE_SPEED?: string;
     UNO_SPEED?: string;
     FORCA_SPEED?: string;
+    MIMICA_SPEED?: string;
   }
 }

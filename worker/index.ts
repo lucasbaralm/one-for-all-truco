@@ -3,6 +3,7 @@ import DobbleRoom from "../party/dobble";
 import FodinhaRoom from "../party/server";
 import ForcaRoom from "../party/forca";
 import LudoRoom from "../party/ludo";
+import MimicaRoom from "../party/mimica";
 import UnoRoom from "../party/uno";
 import { partyServer } from "./adapter";
 
@@ -11,12 +12,13 @@ import { partyServer } from "./adapter";
 // wrangler.jsonc liga aos bindings — o nome do binding é o segmento da URL:
 //   /parties/main/<sala>   Fodinha        /parties/ludo/<sala>    Ludo
 //   /parties/dobble/<sala> Dobble         /parties/uno/<sala>     Uno
-//   /parties/forca/<sala>  Forca
+//   /parties/forca/<sala>  Forca         /parties/mimica/<sala> Mímica
 export const Main = partyServer(FodinhaRoom);
 export const Ludo = partyServer(LudoRoom);
 export const Dobble = partyServer(DobbleRoom);
 export const Uno = partyServer(UnoRoom);
 export const Forca = partyServer(ForcaRoom);
+export const Mimica = partyServer(MimicaRoom);
 
 export default {
   async fetch(request, env) {

@@ -621,6 +621,237 @@
   }
 }
 
+/* ── Mímica ──────────────────────────────────────────────────────────────────
+   O palco mede o espaço que sobrou e tudo se distribui nele; o vídeo de quem faz a mímica é o maior bloco.
+   • Retrato: jogadores (cada um com a sua câmera) numa faixa em cima, o quadro grande, depois título/tempo e o chute.
+   • Paisagem: histórico à esquerda, o quadro grande no meio, título/tempo/chute numa coluna ao lado dele e os
+     jogadores numa coluna à direita. As casinhas do título medem a largura do PRÓPRIO bloco. */
+.mimica-stage {
+  container-type: size;
+  display: grid;
+  place-items: center;
+  flex: 1 1 0%;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+.mimica-layout {
+  --gap: 0.5rem;
+  display: grid;
+  gap: var(--gap);
+  width: min(100cqw, 46rem);
+  height: 100cqh;
+  grid-template-columns: minmax(0, 100%);
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "players"
+    "video"
+    "word"
+    "guess";
+}
+
+.mimica-players {
+  grid-area: players;
+  display: flex;
+  gap: 0.4rem;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0.2rem 0.1rem 0.3rem;
+  justify-content: safe center;
+}
+.mimica-tile {
+  flex: 0 0 auto;
+  width: 6.4rem;
+  aspect-ratio: 4 / 3;
+}
+
+.mimica-video {
+  grid-area: video;
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 1rem;
+}
+
+/* No retrato as duas partes da coluna do lado entram direto na grade; na paisagem viram uma coluna. */
+.mimica-side {
+  display: contents;
+}
+.mimica-info {
+  grid-area: word;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+.mimica-guess {
+  grid-area: guess;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+/* Só a LISTA rola (e é baixa, pra o vídeo ter espaço): o campo de chute fica sempre à vista. */
+.mimica-guesslist {
+  max-height: clamp(3.4rem, 12cqh, 8.5rem);
+  overflow-y: auto;
+}
+.mimica-feed {
+  display: none;
+}
+
+/* Telas baixas (celular em pé pequeno): tudo em volta do vídeo encolhe pra ele não virar uma faixa. */
+@container (max-height: 36rem) {
+  .mimica-layout {
+    --gap: 0.35rem;
+  }
+  .mimica-tile {
+    width: 5.2rem;
+  }
+  .mimica-info {
+    gap: 0.3rem;
+  }
+}
+
+.mimica-wordwrap {
+  container-type: inline-size;
+  width: 100%;
+}
+.mimica-word {
+  /* --maxw = letras da MAIOR palavra: ela cabe numa linha; as palavras de um título se arrumam em linhas */
+  --sw: min(var(--swmax, 3.4rem), calc((100cqw - (var(--maxw) - 1) * 0.3rem) / var(--maxw)));
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.45rem calc(var(--sw) * 0.6);
+}
+/* Celular em pé: título comprido (4 palavras) em 4 linhas come o espaço do vídeo — as palavras se juntam em 3 linhas
+   (palco até 56rem de altura) ou 2 (até 44rem); --pu/--pl/--r (largura, letras e linhas da arrumação) vêm de lib/mimica/wordFit;
+   a casinha também não passa de uma fatia da altura do palco. */
+@container (max-aspect-ratio: 13/10) and (max-height: 56rem) {
+  .mimica-word {
+    --sw: min(var(--swmax, 3.4rem), calc((100cqw - (var(--pl3) - 1) * 0.3rem) / var(--pu3)), calc((28cqh - (var(--r3) - 1) * 0.45rem) / (var(--r3) * 1.25)));
+  }
+}
+@container (max-aspect-ratio: 13/10) and (max-height: 44rem) {
+  .mimica-word {
+    --sw: min(var(--swmax, 3.4rem), calc((100cqw - (var(--pl2) - 1) * 0.3rem) / var(--pu2)), calc((22cqh - (var(--r2) - 1) * 0.45rem) / (var(--r2) * 1.25)));
+  }
+}
+.mimica-wordgroup {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  gap: 0.3rem;
+}
+.mimica-slot {
+  width: var(--sw);
+  height: calc(var(--sw) * 1.25);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  border-bottom: 3px solid rgba(255, 255, 255, 0.55);
+}
+.mimica-glyph {
+  font-size: calc(var(--sw) * 0.8);
+  font-weight: 900;
+  line-height: 1.05;
+}
+.mimica-mark {
+  font-size: calc(var(--sw) * 0.8);
+  font-weight: 900;
+  line-height: 1.05;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+@container (min-aspect-ratio: 13/10) {
+  .mimica-layout {
+    width: min(100cqw, 96rem);
+    grid-template-columns: 13rem minmax(0, 1fr) 20rem 11rem;
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "feed video side players";
+  }
+  .mimica-players {
+    grid-area: players;
+    flex-direction: column;
+    overflow-x: visible;
+    overflow-y: auto;
+    justify-content: flex-start;
+    padding: 0.1rem 0.15rem;
+  }
+  .mimica-tile {
+    width: 100%;
+  }
+  .mimica-side {
+    --swmax: 3rem;
+    grid-area: side;
+    display: flex;
+    flex-direction: column;
+    justify-content: safe center;
+    gap: 0.75rem;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .mimica-guesslist {
+    max-height: clamp(3.4rem, 26cqh, 12rem);
+  }
+  .mimica-feed {
+    grid-area: feed;
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    justify-content: flex-end;
+    pointer-events: none;
+  }
+}
+/* Notebook com pouca altura: no máximo 4 linhas de casinhas, que não passam de 40% do palco (o campo de chute nunca sai da coluna). */
+@container (min-aspect-ratio: 13/10) and (max-height: 44rem) {
+  .mimica-word {
+    --sw: min(var(--swmax, 3.4rem), calc((100cqw - (var(--pl4) - 1) * 0.3rem) / var(--pu4)), calc((40cqh - (var(--r4) - 1) * 0.45rem) / (var(--r4) * 1.25)));
+  }
+}
+/* Celular deitado (muito baixo): o painel do lado fica mais compacto pra o campo de chute caber sem rolar. */
+@container (min-aspect-ratio: 13/10) and (max-height: 26rem) {
+  .mimica-side {
+    --swmax: 2.1rem;
+    gap: 0.4rem;
+  }
+  .mimica-info {
+    gap: 0.25rem;
+  }
+  .mimica-guesslist {
+    max-height: clamp(2.6rem, 22cqh, 5rem);
+  }
+  [data-mimica-turn] {
+    display: none;
+  }
+  .mimica-word {
+    --sw: min(var(--swmax, 3.4rem), calc((100cqw - (var(--pl2) - 1) * 0.3rem) / var(--pu2)), calc((30cqh - (var(--r2) - 1) * 0.45rem) / (var(--r2) * 1.25)));
+  }
+  /* quem faz a mímica: o cartão da música secreta perde o rótulo e o aviso (as regras estão no painel de regras) */
+  .mimica-secret-label,
+  .mimica-secret-note {
+    display: none;
+  }
+  .mimica-secret-title {
+    font-size: 1.05rem;
+  }
+}
+/* Paisagem estreita (celular deitado): sem coluna de histórico — o botão do topo faz o papel. */
+@container (min-aspect-ratio: 13/10) and (max-width: 64rem) {
+  .mimica-layout {
+    grid-template-columns: minmax(0, 1fr) 16rem 8.5rem;
+    grid-template-areas: "video side players";
+  }
+  .mimica-feed {
+    display: none;
+  }
+}
+
 /* ── Dobble ──────────────────────────────────────────────────────────────────
    Mesma ideia do Ludo: o palco mede o espaço que sobrou e as duas cartas
    (a do centro e a minha) viram os maiores círculos que cabem.

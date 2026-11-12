@@ -42,6 +42,11 @@ const MAX_AVATAR_URL_LENGTH = 600;
 // senão ele desiste antes de receber o motivo do fechamento.
 const AUTH_TIMEOUT_MS = 3000;
 
+// Sinais de WebRTC que o servidor repassa (ver src/lib/call/signaling.ts) e o tamanho máximo de uma mensagem
+// (um SDP com vídeo e áudio tem uns 5 KB; cada candidato ICE, uns 300 bytes).
+const RTC_SIGNAL_KINDS = new Set(["hello", "offer", "answer", "ice", "bye", "media"]);
+const MAX_RTC_PAYLOAD = 32_000;
+
 type AuthResult = { username: string } | { error: "invalid" | "unavailable" };
 type ConnState = { username?: string };
 
@@ -78,6 +83,14 @@ export abstract class GameRoom<S> implements RoomHandler {
    * receberem a mesma. Os outros jogos (tudo que está na mesa é público) deixam false.
    */
   protected perViewer(): boolean {
+    return false;
+  }
+  /**
+   * true = a sala tem videochamada: as mensagens "rtc" (sinalização do WebRTC) são repassadas entre quem está
+   * na mesa. O vídeo e o áudio NÃO passam por aqui — vão direto de uma pessoa pra outra; o servidor só entrega
+   * "oferta / resposta / candidato" pro destinatário certo.
+   */
+  protected supportsCall(): boolean {
     return false;
   }
   protected abstract isLobby(state: S): boolean;
@@ -230,6 +243,11 @@ export abstract class GameRoom<S> implements RoomHandler {
       return;
     }
 
+    if (message.type === "rtc") {
+      this.relayCall(username, message);
+      return;
+    }
+
     if (message.type === "join") {
       // O nome vem da identidade verificada, nunca do que o cliente diz.
       const avatar =
@@ -247,6 +265,28 @@ export abstract class GameRoom<S> implements RoomHandler {
 
     const result = this.controller.dispatch(username, message as never);
     if (!result.ok) sender.send(JSON.stringify({ type: "error", error: result.error }));
+  }
+
+  // ── Videochamada (sinalização) ───────────────────────────────────────────
+
+  /**
+   * Entrega uma mensagem de sinalização de `from` pra `message.to`. Regras: a sala precisa ter videochamada, os
+   * dois precisam estar na mesa (quem só assiste não entra na chamada), o remetente é a identidade verificada
+   * (nunca o que o cliente diz) e só passam os tipos de sinal conhecidos, num tamanho de SDP razoável.
+   */
+  private relayCall(from: string, message: { [k: string]: unknown }) {
+    if (!this.supportsCall()) return;
+    const to = message.to;
+    const signal = message.signal as { kind?: unknown } | null;
+    if (typeof to !== "string" || to === from) return;
+    if (!signal || typeof signal !== "object" || typeof signal.kind !== "string" || !RTC_SIGNAL_KINDS.has(signal.kind)) return;
+    const state = this.controller.state;
+    if (!this.findPlayer(state, from) || !this.findPlayer(state, to)) return;
+    const payload = JSON.stringify({ type: "rtc", from, signal });
+    if (payload.length > MAX_RTC_PAYLOAD) return;
+    for (const c of this.room.getConnections<ConnState>()) {
+      if (c.state?.username === to) c.send(payload);
+    }
   }
 
   // ── Estado ───────────────────────────────────────────────────────────────
