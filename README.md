@@ -174,6 +174,15 @@ você apagá-lo, então voltar atrás é só restaurar a variável. Nada de dado
 histórico fica no Supabase. Ao adicionar um jogo novo: classe em `worker/index.ts`, binding em `wrangler.jsonc` e uma
 migração NOVA (`v2`...) listando a classe — nunca edite a `v1` depois do deploy. A `Mimica` já está na `v2`; o próximo jogo vai na `v3`.
 
+**Supabase acordado.** O plano gratuito do Supabase pausa o projeto depois de uma semana sem atividade, e nada no site
+acessa o Supabase enquanto ninguém joga. Por isso o Worker tem um Cron Trigger diário (`triggers.crons` em
+`wrangler.jsonc`, 12:00 UTC) que chama `keepSupabaseAwake` (`party/keepalive.ts`): lê UMA linha de `rooms` com a chave
+anônima (a mesma leitura que a Fodinha já faz). Se a leitura falhar (projeto já pausado, chave trocada, Supabase fora),
+a execução aparece como falha nos logs do Worker (painel da Cloudflare → Workers → `fodinha-party` → Logs). O cron só
+vale enquanto o Worker estiver publicado (`npm run party:deploy`) e **não acorda** um projeto que já pausou — esse
+precisa ser restaurado uma vez no painel do Supabase. Testar sem esperar: `npx wrangler dev --test-scheduled` e
+`curl "http://localhost:8787/__scheduled?cron=0+12+*+*+*"`.
+
 ---
 
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).

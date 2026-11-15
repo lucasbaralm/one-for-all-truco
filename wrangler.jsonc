@@ -28,5 +28,10 @@
   // SUPABASE_URL e SUPABASE_ANON_KEY NÃO ficam aqui:
   //   • local: arquivo .dev.vars (modelo em .dev.vars.example);
   //   • produção: `npx wrangler secret put SUPABASE_URL` e `... SUPABASE_ANON_KEY`.
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+
+  // Todo dia às 12:00 UTC o Worker lê uma linha do Supabase (party/keepalive.ts): o plano gratuito pausa o projeto
+  // depois de uma semana sem atividade. Se a leitura falhar, a execução aparece como falha nos logs do Worker.
+  // Testar sem esperar: `wrangler dev --test-scheduled` e `curl "http://localhost:8787/__scheduled?cron=0+12+*+*+*"`.
+  "triggers": { "crons": ["0 12 * * *"] }
 }
