@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Standing } from "./engine";
 import { myChips, resultLabel, standingLine } from "./summary";
 
-const st = (p: Partial<Standing> = {}): Standing => ({ playerId: "a", name: "A", score: 0, hits: 0, misses: 0, solved: 0, wordFails: 0, ...p });
+const st = (p: Partial<Standing> = {}): Standing => ({ playerId: "a", name: "A", score: 0, hits: 0, misses: 0, solved: 0, wordFails: 0, chosen: 0, stumped: 0, ...p });
 
 describe("resultLabel", () => {
   it("mostra os pontos", () => {
@@ -18,6 +18,12 @@ describe("standingLine", () => {
     expect(standingLine(st({ hits: 2, solved: 1, misses: 1, wordFails: 2 }))).toBe("1 palavra completada · 2 letras certas · 1 erro · 2 chutes de palavra errados");
   });
 
+  it("quem escolheu palavras vê quantas e quantas ninguém acertou", () => {
+    expect(standingLine(st({ chosen: 1 }))).toBe("0 letras certas · escolheu 1 palavra");
+    expect(standingLine(st({ chosen: 2, stumped: 1 }))).toBe("0 letras certas · escolheu 2 palavras (1 ninguém acertou)");
+    expect(standingLine(st({ chosen: 3, stumped: 2 }))).toBe("0 letras certas · escolheu 3 palavras (2 ninguém acertou)");
+  });
+
   it("aguenta estatística faltando (partida salva por uma versão antiga)", () => {
     const old = { playerId: "a", name: "A", score: 10 } as Standing;
     expect(standingLine(old)).toBe("0 letras certas");
@@ -29,5 +35,6 @@ describe("myChips", () => {
     expect(myChips(undefined)).toEqual([]);
     expect(myChips(st({ score: 50, hits: 5 }))).toEqual(["⭐ 50 pontos", "✅ 5 letras certas"]);
     expect(myChips(st({ score: 90, hits: 7, solved: 2, misses: 4 }))).toEqual(["⭐ 90 pontos", "🏅 2 palavras completadas", "✅ 7 letras certas", "❌ 4 erros"]);
+    expect(myChips(st({ score: 60, chosen: 2, stumped: 1 }))).toEqual(["⭐ 60 pontos", "✅ 0 letras certas", "✏️ 2 palavras escolhidas", "😈 1 palavra que ninguém acertou"]);
   });
 });

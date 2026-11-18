@@ -4,13 +4,14 @@ import { X } from "lucide-react";
 import { motion } from "framer-motion";
 
 const RULES: { icon: string; title: string; text: string }[] = [
-  { icon: "🔤", title: "O objetivo", text: "Descobrir a palavra secreta antes de a forca fechar. A forca é de TODOS: são 6 vidas e cada erro tira uma da mesa. Quem mais pontua no fim das palavras vence." },
-  { icon: "🅰️", title: "Chutar uma letra", text: "Na sua vez, escolha uma letra (clique ou digite). Acertou? Ganha 10 pontos por vez que ela aparece. Errou? A mesa perde 1 vida. De um jeito ou de outro a vez passa pro próximo. Acento não conta: chutar A revela o Ã de AVIÃO." },
-  { icon: "🎯", title: "Chutar a palavra", text: "Tem certeza? Chute a palavra inteira: acertou, leva 10 pontos por letra que ainda estava escondida e a rodada acaba. Errou, a mesa perde 2 vidas — cuidado." },
-  { icon: "🏅", title: "Bônus", text: "Quem completa a palavra (revelando a última letra ou acertando o chute) ganha +30 — então cuidado pra não entregar a última letra pro próximo. Se a forca fechar antes, ninguém leva o bônus." },
-  { icon: "⏱️", title: "Tempo", text: "Você tem 25 segundos por jogada. Passou do tempo, o servidor chuta uma letra comum por você." },
-  { icon: "🏆", title: "Fim da partida", text: "São 3, 5 ou 8 palavras (o host escolhe). Cada uma abre com um jogador diferente. Vence quem tiver mais pontos." },
-  { icon: "🤖", title: "Bots", text: "Os fáceis chutam pelas letras mais comuns e arriscam pouco; os difíceis conhecem a lista de palavras e só chutam a palavra quando ela é a única possível." },
+  { icon: "✏️", title: "Quem escolhe", text: "A cada rodada UMA pessoa escolhe a palavra (ou frase), digitando — sem categoria. A dica vocês falam um pro outro na call! Cada um escolhe na sua vez, na ordem da sala." },
+  { icon: "🧍", title: "O boneco é de todos", text: "Quem não escolheu tenta descobrir a palavra chutando letras. Cada erro desenha uma parte do MESMO boneco: cabeça, tronco, braços, pernas, olhos, nariz, boca e, por último, o chapéu — com o chapéu a forca fecha." },
+  { icon: "🅰️", title: "Chutar uma letra", text: "Na sua vez, escolha uma letra (clique ou digite). Acertou? Ganha 10 pontos por vez que ela aparece. Errou? O boneco ganha uma parte. De um jeito ou de outro a vez passa pro próximo. Acento não conta: chutar A revela o Ã de AVIÃO." },
+  { icon: "🎯", title: "Chutar a palavra", text: "Tem certeza? Chute a palavra inteira: acertou, leva 10 pontos por letra que ainda estava escondida e a rodada acaba. Errou, o boneco ganha DUAS partes — cuidado." },
+  { icon: "🏅", title: "Bônus", text: "Quem completa a palavra (revelando a última letra ou acertando o chute) ganha +30 — então cuidado pra não entregar a última letra pro próximo." },
+  { icon: "😈", title: "E quem escolheu?", text: "Ganha 10 pontos por parte do boneco que a mesa precisou desenhar pra acertar. Palavra difícil paga mais — mas se o boneco fechar, ninguém acertou e quem escolheu não ganha nada. Escolha uma palavra desafiadora, mas possível!" },
+  { icon: "⏱️", title: "Tempo", text: "Quem escolhe tem 90 segundos pra digitar; quem chuta tem 40 por jogada (passou, o servidor chuta uma letra comum por você). Quem cair da conexão tem a vez pulada." },
+  { icon: "🏆", title: "Fim da partida", text: "São de 1 a 5 palavras (o host escolhe). Vence quem tiver mais pontos." },
 ];
 
 export function ForcaRulesList() {

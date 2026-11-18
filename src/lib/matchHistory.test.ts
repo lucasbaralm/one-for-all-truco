@@ -9,9 +9,12 @@ describe("histórico de partidas: de que jogo é cada linha", () => {
     expect(gameOf("UNO:K3K3")).toBe("uno");
     expect(gameOf("FORCA:ZZ99")).toBe("forca");
     expect(gameOf("MIMICA:ZZ99")).toBe("mimica");
+    expect(gameOf("MONOPOLY:K3K3")).toBe("monopoly");
+    expect(gameOf("BANCO:K3K3")).toBe("banco");
     expect(gameOf("ABCD")).toBe("fodinha");
     // "LUDO" sem os dois pontos não é Ludo (um código de sala de Fodinha pode ser LUDO)
     expect(gameOf("LUDO")).toBe("fodinha");
+    expect(gameOf("BANCO")).toBe("fodinha");
   });
 
   it("mostra só o código da sala, sem o prefixo", () => {
@@ -20,6 +23,8 @@ describe("histórico de partidas: de que jogo é cada linha", () => {
     expect(roomCodeOf("UNO:ABCD")).toBe("ABCD");
     expect(roomCodeOf("FORCA:ABCD")).toBe("ABCD");
     expect(roomCodeOf("MIMICA:ABCD")).toBe("ABCD");
+    expect(roomCodeOf("MONOPOLY:ABCD")).toBe("ABCD");
+    expect(roomCodeOf("BANCO:ABCD")).toBe("ABCD");
     expect(roomCodeOf("ABCD")).toBe("ABCD");
   });
 });
@@ -54,6 +59,14 @@ describe("describeResult — Uno e Forca", () => {
 
   it("Forca: pontos", () => {
     expect(describeResult("forca", { name: "Dani", score: 120 })).toBe("Dani (120 pts)");
+  });
+});
+
+describe("describeResult — Monopoly e Banco Imobiliário", () => {
+  it("o patrimônio no fim, na moeda de cada jogo", () => {
+    expect(describeResult("monopoly", { name: "Ana", score: 2350 })).toBe("Ana (patrimônio $2.350)");
+    expect(describeResult("monopoly", { name: "Bia", score: 0 })).toBe("Bia (patrimônio $0)");
+    expect(describeResult("banco", { name: "Cris", score: 12500 })).toBe("Cris (patrimônio R$ 12.500)");
   });
 });
 

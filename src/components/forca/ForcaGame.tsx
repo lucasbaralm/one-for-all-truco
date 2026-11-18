@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, Eye, Heart, HelpCircle, LogOut, SmilePlus, Target, Volume2, VolumeX, WifiOff } from "lucide-react";
+import { Eye, Heart, HelpCircle, LogOut, SmilePlus, Target, Volume2, VolumeX, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FeedHistoryButton, FeedList } from "@/components/feed/EventFeed";
 import { GameOverPanel } from "@/components/GameOverPanel";
@@ -14,10 +14,10 @@ import { PlayerAvatar } from "@/components/game/PlayerAvatar";
 import { ScoreDelta } from "@/components/game/ScoreDelta";
 import { WORD_PENALTY } from "@/lib/forca/engine";
 import type { ForcaPlayerView } from "@/lib/forca/engine";
-import { BOT_LEVEL_LABEL } from "@/lib/forca/labels";
 import { FORCA_ERROR_LABEL } from "@/lib/forca/protocol";
 import { myChips, resultLabel, standingLine } from "@/lib/forca/summary";
-import { normalize } from "@/lib/forca/words";
+import { TIMING } from "@/lib/forca/timing";
+import { MAX_WORD_CHARS, normalize, parseWord } from "@/lib/forca/words";
 import { resultHeadline } from "@/lib/gameResult";
 import { REACTION_EMOJIS } from "@/lib/party-codes";
 import { playerColor } from "@/lib/playerColors";
@@ -39,6 +39,9 @@ interface ForcaGameProps {
 /** Depois de mandar um chute, ignora outro até o servidor responder (evita o duplo clique virar erro). */
 const SEND_LOCK_MS = 900;
 
+/** Só letras (com acento) e espaço, em maiúsculas — o que o servidor aceita pra palavra escolhida. */
+const cleanWord = (text: string) => text.replace(/[^\p{L} ]/gu, "").toUpperCase();
+
 export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
   const { view, me } = session;
   const [soundOn, setSoundOn] = useState(true);
@@ -49,6 +52,8 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
   /** Painel "chutar a palavra" aberto + o que foi digitado. */
   const [wordOpen, setWordOpen] = useState(false);
   const [wordText, setWordText] = useState("");
+  /** O que o escolhedor está digitando como palavra da rodada. */
+  const [chooseText, setChooseText] = useState("");
   const lastSend = useRef({ seq: -1, at: 0 });
 
   useEffect(() => setSoundOn(sfx.isEnabled()), []);
@@ -57,7 +62,11 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
   const eventSeq = view?.eventSeq ?? 0;
   const current = view ? view.players[view.turn] : undefined;
   const mine = view?.players.find((p) => p.id === me);
+  const isChooser = !!view && !!mine && view.chooserId === me;
+  /** É a minha vez de chutar. */
   const myTurn = phase === "playing" && !!current && current.id === me;
+  /** É a minha vez de escolher a palavra. */
+  const mustChoose = phase === "choosing" && isChooser;
   const gameOver = phase === "game_over";
   const tried = useMemo(() => new Set((view?.guesses ?? []).map((g) => g.letter)), [view?.guesses]);
 
@@ -73,6 +82,7 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
     soundedSeq.current = view.eventSeq;
     for (const e of view.events) {
       if (e.t === "letter") (e.hits > 0 ? sfx.hit : sfx.miss)();
+      else if (e.t === "chosen") sfx.chosen();
       else if (e.t === "word" && !e.ok) sfx.wordFail();
       else if (e.t === "won") sfx.solved();
       else if (e.t === "lost") sfx.lost();
@@ -80,11 +90,11 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventSeq]);
 
-  // ── minha vez: um "plim"; aba escondida: o título pisca
+  // ── minha vez (de chutar ou de escolher): um "plim"; aba escondida: o título pisca
   useEffect(() => {
-    if (myTurn && !document.hidden) sfx.yourTurn();
-  }, [myTurn]);
-  useTurnAlert(myTurn, "Sua vez!");
+    if ((myTurn || mustChoose) && !document.hidden) sfx.yourTurn();
+  }, [myTurn, mustChoose]);
+  useTurnAlert(myTurn || mustChoose, mustChoose ? "Escolha a palavra!" : "Sua vez!");
 
   const endSoundFor = useRef(0);
   useEffect(() => {
@@ -114,6 +124,10 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
       setWordText("");
     }
   }, [myTurn]);
+  // A escolha acabou (ou foi pulada): limpa o campo da próxima vez.
+  useEffect(() => {
+    if (phase !== "choosing") setChooseText("");
+  }, [phase]);
 
   const guessLetter = (letter: string) => {
     sfx.unlock();
@@ -131,6 +145,11 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
     session.send({ type: "guess_word", word: wordText });
     setWordOpen(false);
     setWordText("");
+  };
+
+  const submitChoice = () => {
+    if (!mustChoose || !parseWord(chooseText)) return;
+    session.send({ type: "choose_word", word: chooseText });
   };
 
   // ── digitar no teclado de verdade
@@ -152,11 +171,15 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
 
   const players = view.players;
   const spectator = !mine;
-  const hasOtherHumans = players.some((p) => !p.bot && p.id !== me);
+  const hasOtherHumans = players.some((p) => p.id !== me);
   const roundOver = phase === "round_end";
+  const choosing = phase === "choosing";
   const colorOf = (id: string) => playerColor(players, id);
+  const chooser = players.find((p) => p.id === view.chooserId);
   const solver = players.find((p) => p.id === view.solvedBy);
-  const solvedPoints = [...view.events].reverse().find((e) => e.t === "won");
+  const wonEvent = [...view.events].reverse().find((e) => e.t === "won");
+  const awayTurn = phase === "playing" && !!current && !current.connected;
+  const chooserName = isChooser ? "Você" : (chooser?.name ?? "Alguém");
 
   // ── texto de status
   let statusText = "";
@@ -164,18 +187,20 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
   if (gameOver) statusText = `${players.find((p) => p.id === view.winnerId)?.name ?? "Alguém"} venceu!`;
   else if (roundOver) {
     if (view.status === "won") statusText = `${solver?.id === me ? "Você completou" : `${solver?.name ?? "Alguém"} completou`} a palavra!`;
-    else statusText = "A forca fechou!";
+    else statusText = "O boneco ficou completo!";
     statusTone = view.status === "won" ? "text-emerald-300" : "text-red-300";
+  } else if (choosing) {
+    statusTone = isChooser ? "text-yellow-300" : "text-white";
+    statusText = isChooser ? "Sua vez de escolher a palavra" : `${chooserName} está escolhendo a palavra…`;
   } else if (myTurn) {
     statusTone = "text-yellow-300";
     statusText = "Sua vez — chute uma letra";
-  } else if (current) statusText = `Vez de ${current.name}`;
+  } else if (isChooser) statusText = "Você escolheu — a galera está chutando";
+  else if (current) statusText = `Vez de ${current.name}`;
   if (toast) {
     statusText = toast.text;
     statusTone = "text-red-300";
   }
-
-  const botTurn = !roundOver && !gameOver && !!current && (current.bot || !current.connected);
 
   return (
     <>
@@ -248,22 +273,23 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
                   key={p.id}
                   player={p}
                   isMe={p.id === me}
+                  isChooser={p.id === view.chooserId && !gameOver}
                   color={colorOf(p.id)}
-                  isTurn={phase === "playing" && current?.id === p.id}
+                  isTurn={(phase === "playing" || choosing) && current?.id === p.id}
                   emojis={session.emojis.filter((e) => e.fromPlayerId === p.id)}
                 />
               ))}
             </div>
 
-            {/* a mesa: rodada, categoria, vidas, forca e palavra */}
+            {/* a mesa: rodada, quem escolheu, vidas, forca e palavra */}
             <div className="forca-board">
               <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
                 <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs font-black uppercase tracking-wide text-zinc-200" data-forca-round="">
                   Palavra {view.roundNo}/{view.rounds}
                 </span>
-                {view.category && (
-                  <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-xs font-black uppercase tracking-wide text-emerald-300" data-forca-category="">
-                    Dica: {view.category}
+                {chooser && (
+                  <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-xs font-black uppercase tracking-wide text-emerald-300" data-forca-chooser="">
+                    ✏️ {choosing ? "Escolhe" : "Escolheu"}: {chooserName}
                   </span>
                 )}
                 <Lives lives={view.lives} max={view.maxLives} />
@@ -274,38 +300,86 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
                   <Gallows lives={view.lives} lost={view.status === "lost"} className="forca-gallows" />
                 </div>
                 <div className="forca-wordcol">
-                  <ForcaWord pattern={view.pattern} tried={tried} status={view.status} />
-                  <div className="forca-wordfoot">
-                    <AnimatePresence mode="wait" initial={false}>
-                      {roundOver ? (
-                        <motion.div
-                          key={`end-${view.roundNo}-${view.status}`}
-                          initial={{ opacity: 0, y: 8 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0 }}
-                          className={`rounded-xl px-3 py-1.5 text-center text-sm font-black ${view.status === "won" ? "bg-emerald-500/20 text-emerald-200" : "bg-red-500/20 text-red-200"}`}
-                          data-forca-roundend={view.status ?? ""}
-                        >
-                          {view.status === "won" ? (
-                            <>
-                              🎉 {solver?.id === me ? "Você" : (solver?.name ?? "Alguém")} completou{solvedPoints && solvedPoints.t === "won" ? ` · +${solvedPoints.points} pontos` : ""}
-                            </>
-                          ) : (
-                            <>☠️ A forca fechou — era {view.word}</>
-                          )}
-                          <span className="mt-0.5 block text-[0.7rem] font-semibold opacity-75">{view.roundNo >= view.rounds ? "Fim da partida logo mais…" : "Próxima palavra já já…"}</span>
-                        </motion.div>
-                      ) : botTurn ? (
-                        <motion.p key="bot" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="text-center text-xs font-bold text-zinc-400">
-                          {current?.bot ? `🤖 ${current.name} está pensando…` : `📡 ${current?.name} caiu — um bot joga por ele`}
-                        </motion.p>
-                      ) : phase === "playing" ? (
-                        <motion.div key="timer" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="w-full max-w-sm">
-                          <TurnTimer deadline={view.turnDeadline} serverNow={session.serverNow} turnKey={`${view.gameNumber}-${view.roundNo}-${view.eventSeq}`} mine={myTurn} />
-                        </motion.div>
-                      ) : null}
-                    </AnimatePresence>
-                  </div>
+                  {choosing ? (
+                    isChooser ? (
+                      <form
+                        className="flex w-full max-w-md flex-col items-center gap-2"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          submitChoice();
+                        }}
+                        data-forca-choose=""
+                      >
+                        <p className="text-sm font-black text-yellow-300">Escolha a palavra (ou frase)</p>
+                        <input
+                          autoFocus
+                          value={chooseText}
+                          onChange={(e) => setChooseText(cleanWord(e.target.value))}
+                          maxLength={MAX_WORD_CHARS}
+                          placeholder="ex.: BORBOLETA ou CASA DE PAPEL"
+                          aria-label="A palavra da rodada"
+                          data-forca-choose-input=""
+                          autoComplete="off"
+                          autoCapitalize="characters"
+                          className="h-11 w-full rounded-lg border border-zinc-700 bg-zinc-950/70 px-3 text-center font-mono text-lg uppercase tracking-widest text-white placeholder:text-sm placeholder:normal-case placeholder:tracking-normal placeholder:text-zinc-600 focus:border-white focus:outline-none"
+                        />
+                        <p className="text-center text-[0.72rem] font-semibold text-zinc-400">Só letras e espaços. Sem categoria: fale a dica pra galera na call 🎧</p>
+                        <Button type="submit" disabled={!parseWord(chooseText)} className="bg-emerald-600 font-bold text-white hover:bg-emerald-700" data-forca-choose-submit="">
+                          Confirmar palavra
+                        </Button>
+                        <div className="w-full max-w-sm">
+                          <TurnTimer deadline={view.turnDeadline} serverNow={session.serverNow} turnKey={`c-${view.gameNumber}-${view.roundNo}`} mine totalMs={TIMING.CHOOSE_MS} />
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="flex w-full max-w-sm flex-col items-center gap-2 text-center" data-forca-waiting="">
+                        <motion.span animate={{ rotate: [0, -12, 12, 0] }} transition={{ repeat: Infinity, duration: 1.6 }} className="text-4xl">
+                          ✏️
+                        </motion.span>
+                        <p className="text-base font-black text-white">{chooserName} está escolhendo a palavra…</p>
+                        <p className="text-xs font-semibold text-zinc-400">Abra o ouvido: a dica vem pela call.</p>
+                        <div className="w-full">
+                          <TurnTimer deadline={view.turnDeadline} serverNow={session.serverNow} turnKey={`c-${view.gameNumber}-${view.roundNo}`} mine={false} totalMs={TIMING.CHOOSE_MS} />
+                        </div>
+                      </div>
+                    )
+                  ) : (
+                    <>
+                      <ForcaWord pattern={view.pattern} tried={tried} status={view.status} secret={isChooser && phase === "playing" ? view.word : null} />
+                      <div className="forca-wordfoot">
+                        <AnimatePresence mode="wait" initial={false}>
+                          {roundOver ? (
+                            <motion.div
+                              key={`end-${view.roundNo}-${view.status}`}
+                              initial={{ opacity: 0, y: 8 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0 }}
+                              className={`rounded-xl px-3 py-1.5 text-center text-sm font-black ${view.status === "won" ? "bg-emerald-500/20 text-emerald-200" : "bg-red-500/20 text-red-200"}`}
+                              data-forca-roundend={view.status ?? ""}
+                            >
+                              {view.status === "won" ? (
+                                <>
+                                  🎉 {solver?.id === me ? "Você" : (solver?.name ?? "Alguém")} completou{wonEvent && wonEvent.t === "won" ? ` · +${wonEvent.points} pontos` : ""}
+                                  {wonEvent && wonEvent.t === "won" && wonEvent.chooser > 0 ? ` · ✏️ ${chooserName} +${wonEvent.chooser}` : ""}
+                                </>
+                              ) : (
+                                <>☠️ O boneco ficou completo — era {view.word}</>
+                              )}
+                              <span className="mt-0.5 block text-[0.7rem] font-semibold opacity-75">{view.roundNo >= view.rounds ? "Fim da partida logo mais…" : "Próxima palavra já já…"}</span>
+                            </motion.div>
+                          ) : awayTurn ? (
+                            <motion.p key="away" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="text-center text-xs font-bold text-zinc-400">
+                              📡 {current?.name} está fora — a vez passa já já
+                            </motion.p>
+                          ) : phase === "playing" ? (
+                            <motion.div key="timer" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="w-full max-w-sm">
+                              <TurnTimer deadline={view.turnDeadline} serverNow={session.serverNow} turnKey={`${view.gameNumber}-${view.roundNo}-${view.eventSeq}`} mine={myTurn} />
+                            </motion.div>
+                          ) : null}
+                        </AnimatePresence>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -313,7 +387,7 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
             {/* teclado + chutar a palavra */}
             <div className="forca-controls">
               <ForcaKeyboard guesses={view.guesses} colorOf={colorOf} enabled={myTurn} onPick={guessLetter} />
-              {!spectator && (
+              {!spectator && !isChooser && (
                 <div className="flex min-h-10 items-center justify-center gap-2">
                   {wordOpen ? (
                     <form
@@ -326,9 +400,9 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
                       <input
                         autoFocus
                         value={wordText}
-                        onChange={(e) => setWordText(e.target.value.replace(/[^\p{L}]/gu, "").toUpperCase())}
-                        maxLength={30}
-                        placeholder={`${view.pattern.length} letras`}
+                        onChange={(e) => setWordText(cleanWord(e.target.value))}
+                        maxLength={MAX_WORD_CHARS}
+                        placeholder={`${view.pattern.filter((c) => c !== " ").length} letras`}
                         aria-label="A palavra inteira"
                         data-forca-word-input=""
                         autoComplete="off"
@@ -341,7 +415,7 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
                         Cancelar
                       </Button>
                       <p className="w-full text-center text-[0.7rem] font-semibold text-amber-300">
-                        {view.lives <= WORD_PENALTY ? "Se errar, a forca fecha pra todo mundo!" : `Errar custa ${WORD_PENALTY} vidas da mesa.`}
+                        {view.lives <= WORD_PENALTY ? "Se errar, o boneco fecha pra todo mundo!" : `Errar custa ${WORD_PENALTY} partes do boneco.`}
                       </p>
                     </form>
                   ) : (
@@ -407,7 +481,7 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
               isMe: s.playerId === me,
             }))}
             actions={[
-              ...(!spectator ? [{ label: players.filter((p) => !p.bot).length === 1 ? "Jogar de novo" : "Voltar para a sala", onClick: session.playAgain, primary: true }] : []),
+              ...(!spectator ? [{ label: "Voltar para a sala", onClick: session.playAgain, primary: true }] : []),
               { label: "Sair", onClick: onExit, icon: <LogOut className="h-4 w-4" /> },
             ]}
           />
@@ -428,7 +502,7 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
             <motion.div className="w-full max-w-xs rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-center shadow-2xl" initial={{ scale: 0.9 }} animate={{ scale: 1 }} onClick={(e) => e.stopPropagation()}>
               <p className="mb-1 text-lg font-black text-white">Sair da partida?</p>
               <p className="mb-4 text-sm text-zinc-400">
-                {spectator ? "Você deixa de assistir a esta sala." : "Um bot assume as suas jogadas até você voltar — a partida fica salva na sala."}
+                {spectator ? "Você deixa de assistir a esta sala." : "A sua vez é pulada enquanto você estiver fora — a partida fica salva na sala."}
               </p>
               <div className="flex gap-2">
                 <Button variant="secondary" className="flex-1" onClick={() => setConfirmLeave(false)}>
@@ -446,16 +520,16 @@ export default function ForcaGame({ session, onExit, title }: ForcaGameProps) {
   );
 }
 
-// ── Vidas ──────────────────────────────────────────────────────────────────
+// ── Boneco: partes que ainda faltam ────────────────────────────────────────
 
 function Lives({ lives, max }: { lives: number; max: number }) {
   return (
-    <span className="flex items-center gap-0.5" data-forca-lives={lives} aria-label={`${lives} de ${max} vidas`}>
+    <span className="flex items-center gap-0.5" data-forca-lives={lives} aria-label={`${lives} de ${max} partes restantes no boneco`}>
       {Array.from({ length: max }, (_, i) => {
         const alive = i < lives;
         return (
           <motion.span key={i} animate={alive ? { scale: 1 } : { scale: [1.5, 1] }} transition={{ duration: 0.3 }} className="inline-flex">
-            <Heart className={`h-4 w-4 ${alive ? "fill-red-500 text-red-500" : "text-zinc-600"}`} />
+            <Heart className={`h-3.5 w-3.5 ${alive ? "fill-red-500 text-red-500" : "text-zinc-600"}`} />
           </motion.span>
         );
       })}
@@ -465,12 +539,27 @@ function Lives({ lives, max }: { lives: number; max: number }) {
 
 // ── Jogador ────────────────────────────────────────────────────────────────
 
-function PlayerTile({ player, isMe, color, isTurn, emojis }: { player: ForcaPlayerView; isMe: boolean; color: string; isTurn: boolean; emojis: { id: string; emoji: string }[] }) {
-  const away = !player.bot && !player.connected;
+function PlayerTile({
+  player,
+  isMe,
+  isChooser,
+  color,
+  isTurn,
+  emojis,
+}: {
+  player: ForcaPlayerView;
+  isMe: boolean;
+  isChooser: boolean;
+  color: string;
+  isTurn: boolean;
+  emojis: { id: string; emoji: string }[];
+}) {
+  const away = !player.connected;
   return (
     <motion.div
       data-forca-tile={player.id}
       data-turn={isTurn ? "true" : "false"}
+      data-chooser={isChooser ? "true" : "false"}
       className="forca-tile relative rounded-xl border bg-black/70"
       style={{
         borderTopColor: isTurn ? "#facc15" : "rgba(255,255,255,0.12)",
@@ -485,19 +574,13 @@ function PlayerTile({ player, isMe, color, isTurn, emojis }: { player: ForcaPlay
       transition={{ duration: 0.2 }}
     >
       <div className="flex min-w-0 items-center gap-1.5">
-        {player.bot ? (
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-emerald-950">
-            <Bot className="h-3.5 w-3.5" />
-          </span>
-        ) : (
-          <PlayerAvatar avatarUrl={player.avatarUrl} name={player.name} className="h-6 w-6 shrink-0 text-[0.6rem]" />
-        )}
+        <PlayerAvatar avatarUrl={player.avatarUrl} name={player.name} className="h-6 w-6 shrink-0 text-[0.6rem]" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[0.72rem] font-bold leading-tight text-white">
             {player.name}
             {isMe && <span className="ml-1 text-[0.6rem] font-semibold text-zinc-400">(você)</span>}
           </p>
-          <p className="truncate text-[0.6rem] leading-tight text-zinc-400">{away ? "desconectado" : player.bot ? BOT_LEVEL_LABEL[player.bot] : " "}</p>
+          <p className="truncate text-[0.6rem] leading-tight text-zinc-400">{away ? "desconectado" : isChooser ? "✏️ escolhe a palavra" : " "}</p>
         </div>
         <span className="shrink-0 text-base font-black tabular-nums text-white" data-forca-score={player.id}>
           <ScoreDelta value={player.score} tone="good" delayMs={0}>

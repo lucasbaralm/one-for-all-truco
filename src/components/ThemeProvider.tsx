@@ -1,10 +1,14 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useSyncExternalStore } from "react";
+import { resolveTheme, themeById, type Theme } from "@/lib/themes";
 
-export type Theme = "aquarium" | "candy" | "adventure" | "pedro" | "lotr" | "mpb" | "lgbt" | "olivia" | "gatos" | "mamadores" | "jessie";
+// Os temas (ids, fundos, camadas escuras…) vivem em src/lib/themes.ts. O tipo
+// continua sendo exportado daqui para quem já importava `Theme` deste arquivo.
+export type { Theme } from "@/lib/themes";
 
-const ALL_THEMES: Theme[] = ["aquarium", "candy", "adventure", "pedro", "lotr", "mpb", "lgbt", "olivia", "gatos", "mamadores", "jessie"];
+// Chave do localStorage — NÃO mudar: quem já escolheu um tema reabre com ele.
+const STORAGE_KEY = "fodinha_theme";
 
 interface ThemeContextType {
   theme: Theme;
@@ -13,60 +17,60 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-const THEME_BG: Record<Theme, string> = {
-  aquarium: "/themes/bg_aquarium.jpg",
-  candy: "/themes/bg_candy.jpg",
-  adventure: "/themes/bg_adventure.jpg",
-  pedro: "/themes/bg_pedro.jpg",
-  lotr: "/themes/bg_lotr.jpg",
-  mpb: "/themes/bg_mpb.jpg",
-  lgbt: "/themes/bg_lgbt.jpg",
-  olivia: "/themes/bg_olivia.png",
-  gatos: "/themes/bg_gatos.jpg",
-  mamadores: "/themes/bg_mamadores.jpg",
-  jessie: "/themes/bg_jessie.jpg",
-};
+// O tema escolhido mora no localStorage (um sistema externo ao React), então é
+// lido com useSyncExternalStore: no servidor / na hidratação o snapshot é `null`
+// ("ainda não sei") e o provider mostra só o fundo escuro, igual ao HTML do
+// servidor; logo depois o React relê o valor salvo — sem setState em effect.
+const listeners = new Set<() => void>();
+// Última escolha feita nesta sessão; vale mesmo se o localStorage estiver bloqueado
+// (modo privado etc.) — nesse caso o tema só dura até recarregar.
+let sessionTheme: Theme | null = null;
 
-const THEME_OVERLAY: Record<Theme, string> = {
-  aquarium: "bg-black/60",
-  candy: "bg-black/50",
-  adventure: "bg-black/65",
-  pedro: "bg-black/55",
-  lotr: "bg-black/60",
-  mpb: "bg-black/50",
-  lgbt: "bg-black/55",
-  olivia: "bg-black/60",
-  gatos: "bg-black/55",
-  mamadores: "bg-black/55",
-  jessie: "bg-black/60",
-};
+function subscribe(onChange: () => void) {
+  listeners.add(onChange);
+  return () => {
+    listeners.delete(onChange);
+  };
+}
+
+function readSaved(): string | null {
+  if (sessionTheme) return sessionTheme;
+  try {
+    return localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+// Tema salvo que não existe mais (ou lixo) cai no tema padrão.
+const getSnapshot = (): Theme | null => resolveTheme(readSaved());
+const getServerSnapshot = (): Theme | null => null;
+
+function saveTheme(theme: Theme) {
+  sessionTheme = theme;
+  try {
+    localStorage.setItem(STORAGE_KEY, theme);
+  } catch {
+    // sem persistência: o tema vale só até recarregar.
+  }
+  listeners.forEach((l) => l());
+}
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>("aquarium");
-  const [mounted, setMounted] = useState(false);
+  const saved = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
-  useEffect(() => {
-    const savedTheme = localStorage.getItem("fodinha_theme") as Theme;
-    if (savedTheme && ALL_THEMES.includes(savedTheme)) {
-      setThemeState(savedTheme);
-    }
-    setMounted(true);
-  }, []);
+  if (saved === null) return <div className="min-h-screen bg-zinc-950" />;
 
-  const setTheme = (newTheme: Theme) => {
-    setThemeState(newTheme);
-    localStorage.setItem("fodinha_theme", newTheme);
-  };
-
-  if (!mounted) return <div className="min-h-screen bg-zinc-950" />;
+  const theme: Theme = saved;
+  const def = themeById(theme);
 
   return (
-    <ThemeContext.Provider value={{ theme, setTheme }}>
+    <ThemeContext.Provider value={{ theme, setTheme: saveTheme }}>
       <div
         className="min-h-screen flex flex-col transition-all duration-700 bg-cover bg-center relative"
-        style={{ backgroundImage: `url(${THEME_BG[theme]})` }}
+        style={{ backgroundImage: `url(${def.bg})` }}
       >
-        <div className={`absolute inset-0 ${THEME_OVERLAY[theme]} pointer-events-none z-0`} />
+        <div className={`absolute inset-0 ${def.overlay} pointer-events-none z-0`} />
         <div className="relative z-10 flex-1 flex flex-col">
           {children}
         </div>

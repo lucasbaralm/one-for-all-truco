@@ -1,9 +1,19 @@
 // Todos os jogos gravam na mesma tabela match_history; o prefixo do room_id é
 // o que separa um do outro (party/ludo.ts, party/dobble.ts...). Sem prefixo = Fodinha.
 
-export type Game = "fodinha" | "ludo" | "dobble" | "uno" | "forca" | "mimica";
+import { money } from "./monopoly/labels";
 
-export const HISTORY_PREFIX: Record<Exclude<Game, "fodinha">, string> = { ludo: "LUDO:", dobble: "DOBBLE:", uno: "UNO:", forca: "FORCA:", mimica: "MIMICA:" };
+export type Game = "fodinha" | "ludo" | "dobble" | "uno" | "forca" | "mimica" | "monopoly" | "banco";
+
+export const HISTORY_PREFIX: Record<Exclude<Game, "fodinha">, string> = {
+  ludo: "LUDO:",
+  dobble: "DOBBLE:",
+  uno: "UNO:",
+  forca: "FORCA:",
+  mimica: "MIMICA:",
+  monopoly: "MONOPOLY:",
+  banco: "BANCO:",
+};
 
 /** Os jogos com prefixo (todos menos a Fodinha). */
 export const PREFIXED_GAMES = Object.keys(HISTORY_PREFIX) as Exclude<Game, "fodinha">[];
@@ -33,5 +43,7 @@ export function describeResult(game: Game, p: Summary): string {
   }
   if (game === "uno") return `${p.name} (${p.score === 0 ? "zerou a mão" : `${p.score} ${p.score === 1 ? "carta" : "cartas"}`})`;
   if (game === "forca" || game === "mimica") return `${p.name} (${p.score} pts)`;
+  // Monopoly / Banco Imobiliário: o score é o patrimônio no fim (dinheiro + propriedades + construções).
+  if (game === "monopoly" || game === "banco") return `${p.name} (patrimônio ${money(game, p.score)})`;
   return `${p.name} (${p.score})`;
 }

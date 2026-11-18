@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "e2e": "node e2e/run.cjs",
     "party:dev": "wrangler dev --port 1999 --ip 0.0.0.0",
     "party:deploy": "wrangler deploy",
     "typecheck:worker": "tsc --noEmit -p worker"

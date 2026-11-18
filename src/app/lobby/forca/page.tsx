@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, Bot, Plus, Users } from "lucide-react";
+import { ArrowLeft, ArrowRight, Plus, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,17 +12,7 @@ import { Label } from "@/components/ui/label";
 import { ProfileHeader } from "@/components/lobby/ProfileHeader";
 import { MatchHistory } from "@/components/lobby/MatchHistory";
 import { ForcaRulesList } from "@/components/forca/ForcaRules";
-import { DEFAULT_ROUNDS, ROUND_CHOICES } from "@/lib/forca/engine";
-import type { BotLevel } from "@/lib/forca/engine";
-import { BOT_LEVEL_LABEL, ROUNDS_LABEL } from "@/lib/forca/labels";
-import { MAX_BOTS } from "@/lib/forca/setup";
-
-const LEVELS: BotLevel[] = ["easy", "medium", "hard"];
-const LEVEL_HINT: Record<BotLevel, string> = {
-  easy: "Chuta pelas letras mais comuns e quase nunca arrisca a palavra",
-  medium: "Conhece a lista de palavras, mas às vezes chuta no escuro",
-  hard: "Conhece a lista de palavras e só arrisca a palavra quando ela é a única possível",
-};
+import { MAX_PLAYERS, MIN_PLAYERS } from "@/lib/forca/engine";
 
 function generateRoomCode(length = 4) {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -31,14 +21,9 @@ function generateRoomCode(length = 4) {
   return code;
 }
 
-const pick = (active: boolean) => (active ? "border-white bg-white text-black" : "border-zinc-700 bg-black/30 text-zinc-300 hover:border-zinc-500");
-
 export default function ForcaLobby() {
   const router = useRouter();
   const [roomCode, setRoomCode] = useState("");
-  const [bots, setBots] = useState(3);
-  const [level, setLevel] = useState<BotLevel>("medium");
-  const [rounds, setRounds] = useState<number>(DEFAULT_ROUNDS);
 
   // Salas online não precisam ser "criadas": o código é só o nome do room no servidor.
   const handleCreateRoom = () => router.push(`/forca/${generateRoomCode()}`);
@@ -47,10 +32,6 @@ export default function ForcaLobby() {
     e.preventDefault();
     if (roomCode.trim().length >= 3) router.push(`/forca/${roomCode.toUpperCase()}`);
   };
-
-  // "Contra bots" também é uma sala no servidor: código de 6 letras pra não esbarrar numa sala
-  // de amigos, e a própria sala monta a partida a partir dos parâmetros. Recarregar retoma.
-  const handlePlayBots = () => router.push(`/forca/${generateRoomCode(6)}?bots=${bots}&level=${level}&rounds=${rounds}`);
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center p-4 py-10">
@@ -61,73 +42,21 @@ export default function ForcaLobby() {
 
         <div className="space-y-3 text-center">
           <h1 className="text-3xl font-black text-white">FORCA</h1>
-          <p className="text-sm text-zinc-400">Descubra a palavra antes de a forca fechar — a forca é de todo mundo!</p>
+          <p className="text-sm text-zinc-400">Um amigo escolhe a palavra, vocês chutam — e o boneco ganha rosto e chapéu a cada erro. Melhor jogar em call!</p>
           <ProfileHeader />
         </div>
 
         <Card className="border-zinc-800 bg-zinc-900">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-white">
-              <Bot className="h-5 w-5 text-emerald-500" /> Contra Bots
+              <Plus className="h-5 w-5 text-emerald-400" /> Nova Sala
             </CardTitle>
-            <CardDescription className="text-zinc-400">Jogue agora, sozinho: o servidor joga pelos bots.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            <div className="space-y-2">
-              <Label className="text-zinc-300">Quantos bots?</Label>
-              <div className="grid grid-cols-7 gap-1.5">
-                {Array.from({ length: MAX_BOTS }, (_, i) => i + 1).map((n) => (
-                  <button key={n} onClick={() => setBots(n)} className={`h-11 rounded-xl border text-lg font-black transition-all ${pick(bots === n)}`}>
-                    {n}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-zinc-300">Dificuldade</Label>
-              <div className="grid grid-cols-3 gap-2">
-                {LEVELS.map((l) => (
-                  <button key={l} onClick={() => setLevel(l)} className={`h-11 rounded-xl border text-sm font-bold transition-all ${pick(level === l)}`}>
-                    {BOT_LEVEL_LABEL[l]}
-                  </button>
-                ))}
-              </div>
-              <p className="text-xs text-zinc-500">{LEVEL_HINT[level]}</p>
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-zinc-300">Quantas palavras?</Label>
-              <div className="grid grid-cols-3 gap-2">
-                {ROUND_CHOICES.map((n) => (
-                  <button key={n} onClick={() => setRounds(n)} className={`h-11 rounded-xl border text-sm font-bold transition-all ${pick(rounds === n)}`}>
-                    {ROUNDS_LABEL(n)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <Button onClick={handlePlayBots} className="h-12 w-full bg-emerald-600 text-lg font-bold text-white hover:bg-emerald-700">
-              Jogar contra {bots} {bots === 1 ? "bot" : "bots"}
-            </Button>
-          </CardContent>
-        </Card>
-
-        <div className="flex items-center gap-4 py-1">
-          <div className="h-px flex-1 bg-zinc-800" />
-          <span className="text-sm font-medium uppercase text-zinc-500">com amigos</span>
-          <div className="h-px flex-1 bg-zinc-800" />
-        </div>
-
-        <Card className="border-zinc-800 bg-zinc-900">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-white">
-              <Plus className="h-5 w-5 text-red-400" /> Nova Sala
-            </CardTitle>
-            <CardDescription className="text-zinc-400">Crie uma sala (2 a 8 jogadores), mande o link e, se faltar gente, complete com bots.</CardDescription>
+            <CardDescription className="text-zinc-400">
+              Crie uma sala ({MIN_PLAYERS} a {MAX_PLAYERS} pessoas), mande o link e abram a call: cada um escolhe uma palavra na sua vez e fala a dica pra galera.
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <Button onClick={handleCreateRoom} className="h-12 w-full bg-red-600 text-lg font-bold text-white hover:bg-red-700">
+            <Button onClick={handleCreateRoom} className="h-12 w-full bg-emerald-600 text-lg font-bold text-white hover:bg-emerald-700">
               Criar Sala
             </Button>
           </CardContent>

@@ -16,18 +16,20 @@ interface TurnTimerProps {
   turnKey: string;
   /** É a minha vez: nos últimos segundos faz "tic". */
   mine: boolean;
+  /** Duração total da contagem (a vez de chutar ou a escolha da palavra). */
+  totalMs?: number;
 }
 
 const WARN_S = 5;
 
-export function TurnTimer({ deadline, serverNow, turnKey, mine }: TurnTimerProps) {
-  const [left, setLeft] = useState<number>(TIMING.TURN_MS);
+export function TurnTimer({ deadline, serverNow, turnKey, mine, totalMs = TIMING.TURN_MS }: TurnTimerProps) {
+  const [left, setLeft] = useState<number>(totalMs);
   const lastSecond = useRef<number | null>(null);
 
   useEffect(() => {
     lastSecond.current = null;
     const tick = () => {
-      const ms = Math.max(0, Math.min(TIMING.TURN_MS, deadline - serverNow()));
+      const ms = Math.max(0, Math.min(totalMs, deadline - serverNow()));
       setLeft(ms);
       const sec = Math.ceil(ms / 1000);
       if (mine && sec <= WARN_S && sec > 0 && lastSecond.current !== sec) {
@@ -38,7 +40,7 @@ export function TurnTimer({ deadline, serverNow, turnKey, mine }: TurnTimerProps
     tick();
     const id = setInterval(tick, 100);
     return () => clearInterval(id);
-  }, [deadline, serverNow, turnKey, mine]);
+  }, [deadline, serverNow, turnKey, mine, totalMs]);
 
   const sec = Math.ceil(left / 1000);
   const urgent = sec <= WARN_S;
@@ -47,7 +49,7 @@ export function TurnTimer({ deadline, serverNow, turnKey, mine }: TurnTimerProps
       <div className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-white/10">
         <div
           className="h-full rounded-full"
-          style={{ width: `${(left / TIMING.TURN_MS) * 100}%`, background: urgent ? "#f87171" : "#fbbf24", transition: "width 0.1s linear, background-color 0.2s" }}
+          style={{ width: `${(left / totalMs) * 100}%`, background: urgent ? "#f87171" : "#fbbf24", transition: "width 0.1s linear, background-color 0.2s" }}
         />
       </div>
       <span className={`w-6 text-right text-sm font-black tabular-nums ${urgent ? "text-red-300" : "text-zinc-300"}`}>{sec}</span>

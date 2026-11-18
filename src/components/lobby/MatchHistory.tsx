@@ -13,6 +13,8 @@ const BADGE: Record<Game, { label: string; className: string }> = {
   uno: { label: "Uno", className: "bg-yellow-500/20 text-yellow-300" },
   forca: { label: "Forca", className: "bg-emerald-500/20 text-emerald-300" },
   mimica: { label: "Mímica", className: "bg-pink-500/20 text-pink-300" },
+  monopoly: { label: "Monopoly", className: "bg-emerald-500/20 text-emerald-300" },
+  banco: { label: "Banco Imobiliário", className: "bg-lime-500/20 text-lime-300" },
 };
 
 interface MatchRow {

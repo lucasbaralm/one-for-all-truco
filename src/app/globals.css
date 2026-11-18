@@ -466,9 +466,16 @@
   width: 100%;
 }
 .forca-word {
-  --sw: min(var(--swmax, 3.2rem), calc((100cqw - (var(--n) - 1) * 0.35rem) / var(--n)));
+  /* --maxw = letras da MAIOR palavra: ela cabe numa linha; as palavras de uma frase se arrumam em linhas */
+  --sw: min(var(--swmax, 3.2rem), calc((100cqw - (var(--maxw) - 1) * 0.35rem) / var(--maxw)));
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
+  gap: 0.5rem calc(var(--sw) * 0.7);
+}
+.forca-wordgroup {
+  display: flex;
+  flex-wrap: nowrap;
   gap: 0.35rem;
 }
 .forca-slot {

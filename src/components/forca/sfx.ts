@@ -6,6 +6,11 @@ export const sfx = {
   isEnabled: isSoundEnabled,
   setEnabled: setSoundEnabled,
   unlock: unlockAudio,
+  /** Alguém escolheu a palavra da rodada. */
+  chosen() {
+    tone(520, 0, 0.09, "triangle", 0.06);
+    tone(780, 0.08, 0.12, "triangle", 0.06);
+  },
   /** Letra que existe na palavra. */
   hit() {
     tone(660, 0, 0.1, "triangle", 0.07);
