@@ -6,6 +6,7 @@ import LudoRoom from "../party/ludo";
 import MimicaRoom from "../party/mimica";
 import { BancoRoom, MonopolyRoom } from "../party/monopoly";
 import UnoRoom from "../party/uno";
+import { keepSupabaseAwake } from "../party/keepalive";
 import { partyServer } from "./adapter";
 
 // Entrada do Worker que hospeda TODOS os room servers (um Durable Object por jogo; cada sala é
@@ -29,5 +30,9 @@ export default {
     // Qualquer outro caminho (inclusive a "/" que o menu usa pra saber se o servidor está de pé)
     // responde 404 — o navegador só precisa de QUALQUER resposta HTTP.
     return (await routePartykitRequest(request, env)) ?? new Response("Not found", { status: 404 });
+  },
+  // Cron Trigger diário (wrangler.jsonc): uma leitura mínima pra o Supabase gratuito não pausar por inatividade.
+  async scheduled(_controller, env) {
+    await keepSupabaseAwake(env);
   },
 } satisfies ExportedHandler<Cloudflare.Env>;
