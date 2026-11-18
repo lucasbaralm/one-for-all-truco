@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ALPHABET, LETTER_ORDER, WORDS, normalize } from "./words";
+import { ALPHABET, LETTER_ORDER, MAX_WORD_CHARS, normalize, parseWord } from "./words";
 
 describe("normalize", () => {
   it("tira acento, põe em maiúsculas e descarta o que não é letra", () => {
@@ -11,26 +11,41 @@ describe("normalize", () => {
   });
 });
 
-describe("lista de palavras", () => {
-  it("toda palavra vira só A–Z com 3+ letras, sem espaço e sem repetir", () => {
-    const seen = new Set<string>();
-    for (const { word, category } of WORDS) {
-      expect(word, `palavra "${word}"`).toMatch(/^\S+$/);
-      const norm = normalize(word);
-      expect(norm.length, `"${word}" tem poucas letras`).toBeGreaterThanOrEqual(3);
-      expect(norm.length, `"${word}" é comprida demais`).toBeLessThanOrEqual(14);
-      expect(norm.length, `"${word}" perdeu letras ao normalizar`).toBe([...word].length);
-      expect(category.length).toBeGreaterThan(0);
-      expect(seen.has(word), `"${word}" repetida`).toBe(false);
-      seen.add(word);
-    }
+describe("parseWord (o que o escolhedor digitou)", () => {
+  it("palavra simples: maiúsculas, com acento, e a versão sem acento alinhada", () => {
+    expect(parseWord("avião")).toEqual({ word: "AVIÃO", norm: "AVIAO" });
+    expect(parseWord("  Coração ")).toEqual({ word: "CORAÇÃO", norm: "CORACAO" });
   });
 
-  it("tem categorias variadas e bastante palavra pra uma partida de 8 sem repetir", () => {
-    expect(new Set(WORDS.map((w) => w.category)).size).toBeGreaterThanOrEqual(6);
-    expect(WORDS.length).toBeGreaterThanOrEqual(100);
+  it("frase: espaços simples entre as palavras (o excesso some) e a norm guarda os espaços", () => {
+    const p = parseWord("casa   de papel")!;
+    expect(p.word).toBe("CASA DE PAPEL");
+    expect(p.norm).toBe("CASA DE PAPEL");
+    expect(p.norm).toHaveLength(p.word.length);
+    expect(parseWord("pão de queijo")).toEqual({ word: "PÃO DE QUEIJO", norm: "PAO DE QUEIJO" });
   });
 
+  it("recusa o que não é letra nem espaço (número, hífen, símbolo) em vez de mudar o que a pessoa quis dizer", () => {
+    for (const bad of ["guarda-chuva", "abc1", "olá!", "a_b", "x.y", "💥💥"]) expect(parseWord(bad), bad).toBeNull();
+  });
+
+  it("precisa de pelo menos 2 letras (espaços não contam) e cabe em 30 caracteres", () => {
+    expect(parseWord("")).toBeNull();
+    expect(parseWord("a")).toBeNull();
+    expect(parseWord("  a  ")).toBeNull();
+    expect(parseWord("a b")).not.toBeNull();
+    expect(parseWord("ab")).not.toBeNull();
+    expect(parseWord("a".repeat(MAX_WORD_CHARS))).not.toBeNull();
+    expect(parseWord("a".repeat(MAX_WORD_CHARS + 1))).toBeNull();
+  });
+
+  it("não aceita lixo que não é texto", () => {
+    expect(parseWord(undefined as unknown as string)).toBeNull();
+    expect(parseWord(42 as unknown as string)).toBeNull();
+  });
+});
+
+describe("letras", () => {
   it("a ordem de frequência das letras cobre o alfabeto inteiro, uma vez cada", () => {
     expect([...LETTER_ORDER].sort().join("")).toBe(ALPHABET);
   });

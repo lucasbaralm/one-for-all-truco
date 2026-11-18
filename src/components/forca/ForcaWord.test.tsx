@@ -3,24 +3,36 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ForcaKeyboard } from "./ForcaKeyboard";
 import { ForcaWord } from "./ForcaWord";
 
-const word = (pattern: (string | null)[], tried: string[], status: "playing" | "won" | "lost" | null = "playing") =>
-  renderToStaticMarkup(<ForcaWord pattern={pattern} tried={new Set(tried)} status={status} />);
-const slots = (html: string) => [...html.matchAll(/data-slot="([^"]*)" data-revealed="(true|false)" data-end="(true|false)"/g)].map((m) => ({ ch: m[1], revealed: m[2] === "true", end: m[3] === "true" }));
+const word = (pattern: (string | null)[], tried: string[], status: "playing" | "won" | "lost" | null = "playing", secret: string | null = null) =>
+  renderToStaticMarkup(<ForcaWord pattern={pattern} tried={new Set(tried)} status={status} secret={secret} />);
+const slots = (html: string) =>
+  [...html.matchAll(/data-slot="([^"]*)" data-revealed="(true|false)" data-end="(true|false)"/g)].map((m) => ({ ch: m[1], revealed: m[2] === "true", end: m[3] === "true" }));
 
 describe("ForcaWord", () => {
   it("uma casinha por letra: as reveladas mostram a letra (com acento), as escondidas ficam vazias", () => {
     const html = word(["A", null, null, "Ã", null], ["A"]);
     expect(slots(html).map((s) => s.ch)).toEqual(["A", "", "", "Ã", ""]);
     expect(slots(html).map((s) => s.revealed)).toEqual([true, false, false, true, false]);
-    expect(html).toContain("--n:5");
+    expect(html).toContain("--maxw:5");
     expect(html).toContain("Palavra com 5 letras");
+    expect(html.match(/forca-wordgroup/g)).toHaveLength(1);
+  });
+
+  it("frase: cada palavra é um grupo que não se parte (a frase quebra entre as palavras); o espaço não é casinha nem conta como letra", () => {
+    const html = word([null, null, null, " ", null, null], []);
+    expect(html.match(/forca-wordgroup/g)).toHaveLength(2);
+    expect(html).toContain('data-words="2"');
+    expect(html).toContain("Palavra com 5 letras");
+    expect(html).toContain("--maxw:3"); // a maior palavra tem 3 letras: é ela que decide o tamanho da casinha
+    expect(slots(html).map((s) => s.ch)).toEqual(["", "", "", "", ""]);
+    expect(html).not.toContain("forca-space");
   });
 
   it("durante a rodada nada é marcado como 'revelada no fim'", () => {
     expect(slots(word(["G", null], ["G"])).every((s) => !s.end)).toBe(true);
   });
 
-  it("rodada acabou: a letra que ninguém chutou aparece marcada — vermelha se a forca fechou, verde se foi chute da palavra", () => {
+  it("rodada acabou: a letra que ninguém chutou aparece marcada — vermelha se o boneco fechou, verde se foi chute da palavra", () => {
     const lost = word([..."GATO"], ["G", "A"], "lost");
     expect(slots(lost).map((s) => s.end)).toEqual([false, false, true, true]);
     expect(lost).toContain("text-red-400");
@@ -33,6 +45,18 @@ describe("ForcaWord", () => {
   it("comparação sem acento: Ã conta como chutada quando A foi chutado", () => {
     const html = word([..."AVIÃO"], ["A", "V", "I", "O"], "lost");
     expect(slots(html).every((s) => !s.end)).toBe(true);
+  });
+
+  it("quem escolheu a palavra vê as letras que faltam, apagadinhas, no lugar certo (os outros não)", () => {
+    const pattern = ["G", null, null, null];
+    const mine = word(pattern, ["G"], "playing", "GATO");
+    expect(mine.match(/data-secret="true"/g)).toHaveLength(3);
+    expect(mine).toContain("text-white/35");
+    for (const ch of ["A", "T", "O"]) expect(mine).toContain(`>${ch}</span>`);
+    const others = word(pattern, ["G"], "playing", null);
+    expect(others).not.toContain("data-secret");
+    expect(others).not.toContain("text-white/35");
+    expect(others).not.toContain(">T</span>");
   });
 });
 

@@ -6,37 +6,53 @@ import { Gallows, PARTS } from "./Gallows";
 const render = (lives: number, lost = false) => renderToStaticMarkup(<Gallows lives={lives} lost={lost} />);
 const parts = (html: string) => [...html.matchAll(/data-forca-part="([a-z-]+)"/g)].map((m) => m[1]);
 
-describe("Gallows", () => {
-  it("tem uma parte do boneco pra cada vida (6 vidas = 6 partes)", () => {
-    expect(PARTS).toHaveLength(MAX_LIVES);
+const ORDER = ["head", "body", "left-arm", "right-arm", "left-leg", "right-leg", "eyes", "nose", "mouth", "hat"];
+
+describe("Gallows (o boneco que a mesa divide)", () => {
+  it("tem uma parte pra cada erro: 10 partes, com o chapéu por último", () => {
+    expect(MAX_LIVES).toBe(10);
+    expect(PARTS.map((p) => p.key)).toEqual(ORDER);
+    expect(PARTS[PARTS.length - 1].key).toBe("hat");
   });
 
-  it("com todas as vidas só a estrutura aparece; cada vida perdida desenha a próxima parte, na ordem", () => {
+  it("com todas as partes por desenhar só a estrutura aparece; cada erro desenha a próxima, na ordem", () => {
     expect(parts(render(MAX_LIVES))).toEqual([]);
     expect(parts(render(MAX_LIVES - 1))).toEqual(["head"]);
     expect(parts(render(MAX_LIVES - 3))).toEqual(["head", "body", "left-arm"]);
-    expect(parts(render(0))).toEqual(["head", "body", "left-arm", "right-arm", "left-leg", "right-leg"]);
+    // todos os membros vêm antes do rosto; o rosto antes do chapéu
+    expect(parts(render(MAX_LIVES - 6))).toEqual(["head", "body", "left-arm", "right-arm", "left-leg", "right-leg"]);
+    expect(parts(render(MAX_LIVES - 9))).toEqual(ORDER.slice(0, 9));
+    expect(parts(render(0))).toEqual(ORDER);
   });
 
-  it("marca quantas partes foram desenhadas e fala as vidas pra leitores de tela", () => {
-    const html = render(2);
-    expect(html).toContain('data-lost="4"');
-    expect(html).toContain("2 vidas restantes");
-    expect(render(1)).toContain("1 vida restante");
+  it("o chapéu só aparece no último erro (é ele que fecha a forca)", () => {
+    expect(parts(render(1))).not.toContain("hat");
+    expect(parts(render(0))).toContain("hat");
   });
 
-  it("vidas fora do intervalo não quebram o desenho", () => {
+  it("marca quantas partes foram desenhadas e fala as partes restantes pra leitores de tela", () => {
+    const html = render(4);
+    expect(html).toContain('data-lost="6"');
+    expect(html).toContain("4 partes restantes");
+    expect(render(1)).toContain("1 parte restante");
+  });
+
+  it("valores fora do intervalo não quebram o desenho", () => {
     expect(parts(render(-3))).toHaveLength(MAX_LIVES);
     expect(parts(render(99))).toEqual([]);
   });
 
-  it("rodada perdida: o boneco balança e ganha olhos de X; senão não", () => {
+  it("rodada perdida: o boneco balança, os olhos viram X e a boca fica triste; senão não", () => {
     const dead = render(0, true);
     expect(dead).toContain("forca-swing");
-    expect(dead).toContain('data-forca-part="eyes"');
+    expect(dead).toContain('data-eyes="x"');
+    expect(dead).toContain('data-mouth="frown"');
     expect(dead).toContain('data-dead="true"');
     const alive = render(0, false);
     expect(alive).not.toContain("forca-swing");
-    expect(alive).not.toContain('data-forca-part="eyes"');
+    expect(alive).toContain('data-eyes="dots"');
+    expect(alive).toContain('data-mouth="smile"');
+    // as partes continuam as mesmas 10, perdendo ou não
+    expect(parts(dead)).toEqual(parts(alive));
   });
 });

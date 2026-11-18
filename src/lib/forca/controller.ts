@@ -1,16 +1,15 @@
 // Controlador de uma sala de Forca: guarda o ForcaState, aplica as ações dos
-// jogadores (com permissões) e dirige o que acontece sozinho — bots chutando,
-// o chute automático quando o tempo da vez estoura, um bot jogando por quem
-// caiu da conexão e a passagem de uma palavra pra outra. Roda no room server
-// (party/forca.ts), com o mesmo relógio "do jogo" do Dobble (clock()).
+// jogadores (com permissões) e dirige o que acontece sozinho — o chute automático quando
+// o tempo da vez estoura, pular a vez (ou a escolha da palavra) de quem caiu da conexão
+// e a passagem de uma palavra pra outra. Roda no room server (party/forca.ts), com o
+// mesmo relógio "do jogo" do Dobble (clock()).
 
-import { BotAction, chooseBotAction } from "./bot";
 import {
   ForcaState,
   Result,
-  addBot,
   advanceRound,
   canStart,
+  chooseWord,
   createLobby,
   currentPlayer,
   guessLetter,
@@ -18,9 +17,10 @@ import {
   joinLobby,
   removePlayer,
   returnToLobby,
-  setBotLevel,
   setPlayerConnected,
   setRounds,
+  skipChooser,
+  skipTurn,
   startGame,
   timeoutTurn,
 } from "./engine";
@@ -29,34 +29,33 @@ import { TIMING } from "./timing";
 
 type Rng = () => number;
 
-type AutoMessage = ForcaClientMessage | { type: "timeout" } | { type: "advance" };
+/** O que o próprio jogo faz, sem ninguém clicar. */
+type AutoMessage = { type: "timeout" } | { type: "advance" } | { type: "skip_chooser" } | { type: "skip_turn" };
 
 interface AutoAction {
   delayMs: number;
-  actorId: string;
   message: AutoMessage;
 }
 
-const between = (rng: Rng, min: number, max: number) => min + rng() * (max - min);
-
-const toMessage = (a: BotAction): ForcaClientMessage => (a.type === "letter" ? { type: "guess", letter: a.letter } : { type: "guess_word", word: a.word });
-
 /** O que o jogo faz sozinho a seguir (null = espera um humano). `now` = relógio do jogo, em ms. */
-export function nextAutoAction(state: ForcaState, rng: Rng, now: number): AutoAction | null {
-  if (state.phase === "round_end") return { delayMs: TIMING.ROUND_END_MS, actorId: "server", message: { type: "advance" } };
+export function nextAutoAction(state: ForcaState, now: number): AutoAction | null {
+  if (state.phase === "round_end") return { delayMs: TIMING.ROUND_END_MS, message: { type: "advance" } };
+
+  if (state.phase === "choosing") {
+    const chooser = state.players.find((p) => p.id === state.chooserId);
+    // Escolhedor fora da conexão: não dá pra esperar — pula a rodada depois de uma folga.
+    if (!chooser || !chooser.connected) return { delayMs: TIMING.DISCONNECTED_MS, message: { type: "skip_chooser" } };
+    return { delayMs: Math.max(0, state.turnDeadline - now), message: { type: "skip_chooser" } };
+  }
+
   if (state.phase !== "playing") return null;
   const player = currentPlayer(state);
   if (!player) return null;
-
-  if (player.bot || !player.connected) {
-    const action = chooseBotAction(state, player.bot ?? "medium", rng);
-    if (!action) return null;
-    const delayMs = player.bot ? between(rng, TIMING.BOT_THINK_MIN_MS, TIMING.BOT_THINK_MAX_MS) : TIMING.DISCONNECTED_MS;
-    return { delayMs, actorId: player.id, message: toMessage(action) };
-  }
-  // Humano conectado: espera ele — até estourar o tempo da vez.
-  if (state.turnDeadline > 0) return { delayMs: Math.max(0, state.turnDeadline - now), actorId: player.id, message: { type: "timeout" } };
-  return null;
+  if (player.connected) return { delayMs: Math.max(0, state.turnDeadline - now), message: { type: "timeout" } };
+  // Chutador fora da conexão: pula a vez dele — mas só se sobrou alguém conectado pra jogar
+  // (senão ficaria passando a vez em círculos; a sala espera alguém voltar).
+  const someoneToPlay = state.players.some((p) => p.connected && p.id !== state.chooserId && p.id !== player.id);
+  return someoneToPlay ? { delayMs: TIMING.DISCONNECTED_MS, message: { type: "skip_turn" } } : null;
 }
 
 export interface ForcaControllerOptions {
@@ -104,6 +103,13 @@ export class ForcaController {
   setPaused(paused: boolean) {
     if (this.paused === paused) return;
     this.paused = paused;
+    if (!paused && (this.state.phase === "choosing" || this.state.phase === "playing")) {
+      // A sala ficou vazia e o relógio seguiu andando: quem volta não pode encontrar a vez já vencida.
+      // Recomeça a contagem de quem estava na vez (e avisa todo mundo do prazo novo).
+      const window = this.state.phase === "choosing" ? TIMING.CHOOSE_MS : TIMING.TURN_MS;
+      this.commit({ ...this.state, turnDeadline: this.clock() + window }, 0);
+      return;
+    }
     this.reschedule(0);
   }
 
@@ -136,29 +142,15 @@ export class ForcaController {
     switch (message.type) {
       case "join": {
         // Sala que já acabou e ficou vazia: quem chega depois recomeça no lobby.
-        const stale = s.phase === "game_over" && !s.players.some((p) => p.id === actorId) && !s.players.some((p) => !p.bot && p.connected);
+        const stale = s.phase === "game_over" && !s.players.some((p) => p.id === actorId) && !s.players.some((p) => p.connected);
         result = joinLobby(stale ? returnToLobby(s) : s, { id: actorId, name: message.name, avatarUrl: message.avatarUrl });
         break;
       }
-      case "add_bot":
-        result = isHost ? addBot(s, message.level) : notHost;
-        break;
-      case "remove_bot": {
-        const bot = s.players.find((p) => p.id === message.botId && p.bot);
-        if (!isHost) result = notHost;
-        else if (s.phase !== "lobby") result = { ok: false, error: "not_in_lobby" };
-        else if (!bot) result = { ok: false, error: "not_a_bot" };
-        else result = { ok: true, state: removePlayer(s, bot.id) };
-        break;
-      }
-      case "set_bot_level":
-        result = isHost ? setBotLevel(s, message.botId, message.level) : notHost;
-        break;
       case "set_rounds":
         result = isHost ? setRounds(s, message.rounds) : notHost;
         break;
       case "kick": {
-        const target = s.players.find((p) => p.id === message.playerId && !p.bot);
+        const target = s.players.find((p) => p.id === message.playerId);
         if (!isHost) result = notHost;
         else if (!target || target.id === actorId) result = { ok: false, error: "not_in_room" };
         else {
@@ -173,11 +165,10 @@ export class ForcaController {
       case "start":
         if (!isHost) result = notHost;
         else if (!canStart(s)) result = { ok: false, error: "not_enough_players" };
-        else {
-          // A vez só começa a contar depois da apresentação da primeira palavra.
-          result = startGame(s, this.rng, this.clock() + TIMING.INTRO_MS);
-          settle = TIMING.INTRO_MS;
-        }
+        else result = startGame(s, this.clock());
+        break;
+      case "choose_word":
+        result = typeof message.word === "string" ? chooseWord(s, actorId, message.word, this.clock()) : { ok: false, error: "bad_word" };
         break;
       case "guess":
         result = typeof message.letter === "string" ? guessLetter(s, actorId, message.letter, this.clock()) : { ok: false, error: "bad_letter" };
@@ -220,28 +211,24 @@ export class ForcaController {
   private reschedule(settle: number) {
     this.cancelTimer();
     if (this.paused) return;
-    const auto = nextAutoAction(this.state, this.rng, this.clock());
+    const auto = nextAutoAction(this.state, this.clock());
     if (!auto) return;
-    // O estouro do tempo da vez é medido no relógio do jogo (não soma a animação).
-    const wait = auto.message.type === "timeout" ? auto.delayMs : settle + auto.delayMs;
+    // O fim do prazo da vez é medido no relógio do jogo (não soma a animação).
+    const waitsDeadline = auto.message.type === "timeout" || (auto.message.type === "skip_chooser" && this.state.players.find((p) => p.id === this.state.chooserId)?.connected);
+    const wait = waitsDeadline ? auto.delayMs : settle + auto.delayMs;
     this.timer = this.setTimer(() => {
       this.timer = null;
-      this.run(auto);
+      this.run(auto.message);
     }, wait / this.speed);
   }
 
-  private run(auto: AutoAction) {
-    const { message } = auto;
-    if (message.type === "advance") {
-      const r = advanceRound(this.state, this.rng, this.clock());
-      if (r.ok) this.commit(r.state, TIMING.LETTER_SETTLE_MS);
-      return;
-    }
-    if (message.type === "timeout") {
-      const r = timeoutTurn(this.state, this.rng, this.clock());
-      if (r.ok) this.commit(r.state, TIMING.LETTER_SETTLE_MS);
-      return;
-    }
-    this.dispatch(auto.actorId, message);
+  private run(message: AutoMessage) {
+    const now = this.clock();
+    let r: Result;
+    if (message.type === "advance") r = advanceRound(this.state, now);
+    else if (message.type === "timeout") r = timeoutTurn(this.state, this.rng, now);
+    else if (message.type === "skip_chooser") r = skipChooser(this.state, now);
+    else r = skipTurn(this.state, now);
+    if (r.ok) this.commit(r.state, message.type === "advance" || message.type === "skip_chooser" ? 0 : TIMING.LETTER_SETTLE_MS);
   }
 }

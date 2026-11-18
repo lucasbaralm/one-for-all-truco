@@ -1,42 +1,59 @@
-// Palavras da Forca (com acento, como se escreve) e a categoria que aparece como dica.
-// Uma palavra por vez, só letras — o acento só aparece na tela quando a letra é revelada
-// (o jogo compara pela letra SEM acento: chutar "A" revela o "Ã" de "AVIÃO").
-
-export interface WordEntry {
-  word: string;
-  category: string;
-}
-
-const LISTS: Record<string, string> = {
-  Animal:
-    "ELEFANTE GIRAFA CACHORRO GOLFINHO TARTARUGA BORBOLETA CROCODILO PAPAGAIO CAVALO PINGUIM JACARÉ MACACO COELHO TUBARÃO SERPENTE FORMIGA COBRA LEÃO ZEBRA CAMELO ÁGUIA URSO BALEIA ARARA",
-  Fruta:
-    "MORANGO ABACAXI MELANCIA BANANA LARANJA MAÇÃ UVA MANGA GOIABA MARACUJÁ PÊSSEGO CEREJA LIMÃO ABACATE JABUTICABA CAJU AMORA PITANGA COCO MELÃO",
-  País: "BRASIL ARGENTINA PORTUGAL JAPÃO ESPANHA ALEMANHA ITÁLIA CANADÁ MÉXICO URUGUAI CHILE FRANÇA EGITO RÚSSIA ÍNDIA PERU COLÔMBIA ANGOLA AUSTRÁLIA SUÉCIA",
-  Profissão:
-    "MÉDICO PROFESSOR BOMBEIRO PADEIRO ENGENHEIRO DENTISTA MOTORISTA JORNALISTA PROGRAMADOR ADVOGADO PINTOR COZINHEIRO CARTEIRO FAZENDEIRO ARQUITETO PILOTO ATOR CIENTISTA MÚSICO GARÇOM",
-  Comida:
-    "FEIJOADA BRIGADEIRO PIZZA HAMBÚRGUER LASANHA COXINHA PAMONHA TAPIOCA SORVETE PIPOCA MACARRÃO CHURRASCO PASTEL OMELETE BOLO QUEIJO SANDUÍCHE ACARAJÉ FAROFA PUDIM",
-  Objeto:
-    "CADEIRA TELEFONE GELADEIRA COMPUTADOR ESPELHO TESOURA MOCHILA RELÓGIO LANTERNA VENTILADOR TRAVESSEIRO CHAVEIRO LIVRO CANETA VIOLÃO ÓCULOS ESCOVA GARRAFA MARTELO CORTINA",
-  Esporte:
-    "FUTEBOL VOLEIBOL NATAÇÃO BASQUETE CICLISMO ATLETISMO TÊNIS BOXE JUDÔ GINÁSTICA SURFE PATINAÇÃO CAPOEIRA HANDEBOL ESGRIMA CORRIDA MARATONA ARCO SKATE BEISEBOL",
-  Natureza:
-    "MONTANHA CACHOEIRA FLORESTA VULCÃO TEMPESTADE DESERTO OCEANO PLANETA ESTRELA FURACÃO PRAIA RELÂMPAGO GELEIRA SELVA LAGO CAVERNA NEBLINA PLANÍCIE TROVÃO ILHA",
-};
-
-export const WORDS: readonly WordEntry[] = Object.entries(LISTS).flatMap(([category, words]) => words.split(" ").map((word) => ({ word, category })));
+// Texto da Forca: as palavras agora são digitadas por quem escolhe a rodada (sem lista nem
+// categoria — a dica é falada na call). Aqui ficam as peças de texto: tirar o acento, aceitar
+// só letras e espaços e montar a palavra/frase da rodada.
+//
+// O jogo compara as letras SEM acento: chutar "A" revela o "Ã" de AVIÃO.
 
 export const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-/** Letras mais comuns em português, da mais pra menos frequente (desempate dos bots). */
+/** Letras mais comuns em português, da mais pra menos frequente (o chute automático do tempo esgotado). */
 export const LETTER_ORDER = "AEOSRIDNMTCULPVGQBFHZJXKWY";
+
+/** Mínimo de letras da palavra/frase e máximo de caracteres (contando os espaços). */
+export const MIN_WORD_LETTERS = 2;
+export const MAX_WORD_CHARS = 30;
+
+/** Os acentos, depois do normalize("NFD"): marcas combinantes U+0300 a U+036F. */
+const COMBINING_MARKS = new RegExp(`[${String.fromCharCode(0x300)}-${String.fromCharCode(0x36f)}]`, "g");
 
 /** "avião" → "AVIAO": maiúsculas, sem acento, só A–Z (o resto é descartado). */
 export function normalize(text: string): string {
   return text
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(COMBINING_MARKS, "")
     .toUpperCase()
     .replace(/[^A-Z]/g, "");
+}
+
+export interface ParsedWord {
+  /** Como aparece na tela: maiúsculas, COM acento, espaços simples entre as palavras. */
+  word: string;
+  /** Uma letra A–Z (sem acento) por caractere de `word`, e " " nos espaços — alinhada com `word`. */
+  norm: string;
+}
+
+/**
+ * Lê o que o escolhedor digitou. Só vale letras e espaços (acentos ficam); qualquer outro
+ * caractere (número, hífen, símbolo) recusa a palavra, em vez de mudar o que ele quis dizer.
+ * Devolve null se não presta (poucas letras, comprida demais, caractere estranho).
+ */
+export function parseWord(raw: string): ParsedWord | null {
+  if (typeof raw !== "string") return null;
+  const chars = [...raw.trim().toUpperCase().replace(/\s+/g, " ")];
+  let word = "";
+  let norm = "";
+  for (const ch of chars) {
+    if (ch === " ") {
+      word += " ";
+      norm += " ";
+      continue;
+    }
+    const n = normalize(ch);
+    if (n.length !== 1) return null;
+    word += ch;
+    norm += n;
+  }
+  if (word.length > MAX_WORD_CHARS) return null;
+  if (norm.replace(/ /g, "").length < MIN_WORD_LETTERS) return null;
+  return { word, norm };
 }

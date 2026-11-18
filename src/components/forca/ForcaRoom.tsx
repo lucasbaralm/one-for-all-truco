@@ -7,11 +7,9 @@ import { Button } from "@/components/ui/button";
 import { ConnectionProblem } from "@/components/ConnectionProblem";
 import { useAuthUser } from "@/lib/supabase/useAuthUser";
 import type { PartyUser } from "@/lib/party/usePartyRoom";
-import { BOT_LEVEL_LABEL } from "@/lib/forca/labels";
-import type { BotsSetup } from "@/lib/forca/setup";
 import ForcaGame from "./ForcaGame";
 import ForcaLobbyRoom from "./ForcaLobbyRoom";
-import { isSoloVsBots, useForcaSession } from "./useForcaSession";
+import { useForcaSession } from "./useForcaSession";
 
 // Depois desse tempo sem conectar, a tela deixa de só girar e diz o que está errado.
 const SLOW_CONNECT_MS = 5000;
@@ -25,9 +23,9 @@ function Connecting({ text }: { text: string }) {
   );
 }
 
-function ForcaOnline({ roomId, user, setup }: { roomId: string; user: PartyUser; setup?: BotsSetup }) {
+function ForcaOnline({ roomId, user }: { roomId: string; user: PartyUser }) {
   const router = useRouter();
-  const session = useForcaSession(roomId, user, setup);
+  const session = useForcaSession(roomId, user);
   const [slow, setSlow] = useState(false);
   const hasState = !!session.view;
 
@@ -58,18 +56,11 @@ function ForcaOnline({ roomId, user, setup }: { roomId: string; user: PartyUser;
     return <Connecting text={`Conectando à sala ${roomId}...`} />;
   }
   if (session.view.phase === "lobby") return <ForcaLobbyRoom session={session} roomId={roomId} onExit={exit} />;
-
-  // "Eu contra bots" é uma sala como as outras — só muda o título.
-  let title = `Sala ${roomId}`;
-  if (isSoloVsBots(session.view, session.me)) {
-    const bots = session.view.players.filter((p) => p.bot);
-    title = `Contra ${bots.length} ${bots.length === 1 ? "bot" : "bots"} · ${BOT_LEVEL_LABEL[bots[0].bot!]}`;
-  }
-  return <ForcaGame session={session} onExit={exit} title={title} />;
+  return <ForcaGame session={session} onExit={exit} title={`Sala ${roomId}`} />;
 }
 
-export default function ForcaRoom({ roomId, setup }: { roomId: string; setup?: BotsSetup }) {
+export default function ForcaRoom({ roomId }: { roomId: string }) {
   const { user, loading } = useAuthUser(true);
   if (loading || !user) return <Connecting text="Entrando na sala..." />;
-  return <ForcaOnline roomId={roomId} user={{ name: user.name, avatarUrl: user.avatarUrl }} setup={setup} />;
+  return <ForcaOnline roomId={roomId} user={{ name: user.name, avatarUrl: user.avatarUrl }} />;
 }
