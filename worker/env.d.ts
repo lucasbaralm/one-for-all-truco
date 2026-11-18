@@ -7,6 +7,8 @@ declare namespace Cloudflare {
     Uno: DurableObjectNamespace;
     Forca: DurableObjectNamespace;
     Mimica: DurableObjectNamespace;
+    Monopoly: DurableObjectNamespace;
+    Banco: DurableObjectNamespace;
     SUPABASE_URL: string;
     SUPABASE_ANON_KEY: string;
     // Só os testes ponta a ponta definem estas (wrangler dev --var UNO_SPEED:8): dividem as esperas dos bots.
@@ -15,5 +17,8 @@ declare namespace Cloudflare {
     UNO_SPEED?: string;
     FORCA_SPEED?: string;
     MIMICA_SPEED?: string;
+    // O Banco Imobiliário lê BANCO_SPEED e, sem ele, MONOPOLY_SPEED (é o mesmo jogo).
+    MONOPOLY_SPEED?: string;
+    BANCO_SPEED?: string;
   }
 }

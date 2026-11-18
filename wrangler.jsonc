@@ -16,13 +16,16 @@
       { "name": "Dobble", "class_name": "Dobble" },
       { "name": "Uno", "class_name": "Uno" },
       { "name": "Forca", "class_name": "Forca" },
-      { "name": "Mimica", "class_name": "Mimica" }
+      { "name": "Mimica", "class_name": "Mimica" },
+      { "name": "Monopoly", "class_name": "Monopoly" },
+      { "name": "Banco", "class_name": "Banco" }
     ]
   },
   // Cada classe nova entra numa migração nova (v2, v3...) — nunca edite a v1 depois do deploy.
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Main", "Ludo", "Dobble", "Uno", "Forca"] },
-    { "tag": "v2", "new_sqlite_classes": ["Mimica"] }
+    { "tag": "v2", "new_sqlite_classes": ["Mimica"] },
+    { "tag": "v3", "new_sqlite_classes": ["Monopoly", "Banco"] }
   ],
 
   // SUPABASE_URL e SUPABASE_ANON_KEY NÃO ficam aqui:

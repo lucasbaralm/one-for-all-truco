@@ -7,6 +7,7 @@ import { useServiceStatus } from "@/components/ServiceStatus";
 import { ProfileHeader } from "@/components/lobby/ProfileHeader";
 import { MatchHistory } from "@/components/lobby/MatchHistory";
 import { LUDO_COLORS } from "@/components/ludo/colors";
+import { GROUP_COLOR } from "@/lib/monopoly/editions";
 
 // Menu inicial depois do login: aqui a pessoa decide qual jogo vai jogar.
 // Cada jogo tem o próprio lobby (salas, entrar por código, contra bots).
@@ -186,6 +187,63 @@ function MimicaArt() {
   );
 }
 
+/** Um mini tabuleiro: moldura de casas coloridas, a ficha da edição pulando e um dado. */
+function BoardArt({ edition }: { edition: "monopoly" | "banco" }) {
+  const monopoly = edition === "monopoly";
+  const paper = monopoly ? "#dcebd8" : "#f1f2cf";
+  const felt = monopoly ? "#c9e3cd" : "#d7e8b4";
+  const line = monopoly ? "#1f3b2b" : "#2b4a1f";
+  const bands = [GROUP_COLOR.brown, GROUP_COLOR.sky, GROUP_COLOR.pink, GROUP_COLOR.orange, GROUP_COLOR.red, GROUP_COLOR.yellow, GROUP_COLOR.green, GROUP_COLOR.navy];
+  return (
+    <div className="relative flex h-32 items-center justify-center">
+      <motion.svg viewBox="0 0 100 100" className="h-28 w-28 drop-shadow-xl" animate={{ rotate: [-4, 3, -4] }} transition={{ duration: 7, repeat: Infinity, ease: "easeInOut" }}>
+        <rect width="100" height="100" rx="6" fill={line} />
+        <rect x="2" y="2" width="96" height="96" rx="4" fill={paper} />
+        <rect x="22" y="22" width="56" height="56" fill={felt} stroke={line} strokeWidth="0.8" />
+        {bands.map((c, i) => (
+          <g key={i}>
+            <rect x={22 + i * 7} y="2" width="7" height="20" fill={paper} stroke={line} strokeWidth="0.6" />
+            <rect x={22 + i * 7} y="14" width="7" height="8" fill={c} stroke={line} strokeWidth="0.4" />
+            <rect x={22 + i * 7} y="78" width="7" height="20" fill={paper} stroke={line} strokeWidth="0.6" />
+            <rect x={22 + i * 7} y="78" width="7" height="8" fill={bands[(i + 3) % 8]} stroke={line} strokeWidth="0.4" />
+          </g>
+        ))}
+        {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+          <g key={i}>
+            <rect x="2" y={22 + i * 7} width="20" height="7" fill={paper} stroke={line} strokeWidth="0.6" />
+            <rect x="14" y={22 + i * 7} width="8" height="7" fill={bands[(i + 5) % 8]} stroke={line} strokeWidth="0.4" />
+            <rect x="78" y={22 + i * 7} width="20" height="7" fill={paper} stroke={line} strokeWidth="0.6" />
+            <rect x="78" y={22 + i * 7} width="8" height="7" fill={bands[(i + 1) % 8]} stroke={line} strokeWidth="0.4" />
+          </g>
+        ))}
+        <text x="50" y="52" textAnchor="middle" fontSize={monopoly ? 9 : 8} fontWeight="900" fontStyle="italic" fill={monopoly ? "#d1242b" : "#0f7a3d"}>
+          {monopoly ? "MONOPOLY" : "BANCO"}
+        </text>
+        <text x="50" y="62" textAnchor="middle" fontSize="6" fontWeight="800" fill={line}>
+          {monopoly ? "$$$" : "IMOBILIÁRIO"}
+        </text>
+      </motion.svg>
+      <motion.span className="absolute left-3 top-2 text-3xl drop-shadow-lg" animate={{ y: [0, -9, 0], rotate: [0, 12, -8, 0] }} transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}>
+        {monopoly ? "🎩" : "🛵"}
+      </motion.span>
+      <motion.div
+        className="absolute -right-1 bottom-0 flex h-9 w-9 items-center justify-center rounded-lg border border-black/10 bg-white shadow-xl"
+        animate={{ y: [0, -8, 0], rotate: [0, 16, -10, 0] }}
+        transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
+      >
+        <div className="grid h-6 w-6 grid-cols-3 grid-rows-3">
+          {[0, 2, 4, 6, 8].map((i) => (
+            <span key={i} className="m-auto h-1.5 w-1.5 rounded-full bg-zinc-800" style={{ gridArea: `${Math.floor(i / 3) + 1} / ${(i % 3) + 1}` }} />
+          ))}
+        </div>
+      </motion.div>
+      <motion.span className="absolute -left-1 bottom-1 text-2xl" animate={{ scale: [1, 1.18, 1] }} transition={{ duration: 2.2, repeat: Infinity }}>
+        {monopoly ? "🏨" : "🏠"}
+      </motion.span>
+    </div>
+  );
+}
+
 function GameCard({
   href,
   title,
@@ -317,8 +375,8 @@ export default function GameMenu() {
           <GameCard
             href="/lobby/forca"
             title="Forca"
-            tagline="Chute letras na sua vez, descubra a palavra antes de a forca fechar e some mais pontos que a mesa."
-            chips={["2–8 jogadores", "Online", "Contra bots"]}
+            tagline="Um amigo escolhe a palavra, vocês chutam letras — e o boneco ganha rosto e chapéu a cada erro."
+            chips={["2–4 jogadores", "Online", "Pra jogar em call"]}
             accent="#10b981"
             art={<ForcaArt />}
             delay={0.45}
@@ -333,6 +391,28 @@ export default function GameMenu() {
             accent="#ec4899"
             art={<MimicaArt />}
             delay={0.55}
+            offline={offline}
+            className="lg:col-span-2"
+          />
+          <GameCard
+            href="/lobby/monopoly"
+            title="Monopoly"
+            tagline="Compre ruas, construa casas e hotéis, dê lances nos leilões e leve os amigos à falência."
+            chips={["2–6 jogadores", "Online", "Contra bots"]}
+            accent="#d1242b"
+            art={<BoardArt edition="monopoly" />}
+            delay={0.65}
+            offline={offline}
+            className="lg:col-span-2 lg:col-start-2"
+          />
+          <GameCard
+            href="/lobby/banco"
+            title="Banco Imobiliário"
+            tagline="O clássico brasileiro: Leblon, Av. Paulista, companhias, Sorte ou Revés — e cadeia."
+            chips={["2–6 jogadores", "Online", "Contra bots"]}
+            accent="#16a34a"
+            art={<BoardArt edition="banco" />}
+            delay={0.75}
             offline={offline}
             className="lg:col-span-2"
           />

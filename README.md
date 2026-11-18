@@ -1,4 +1,4 @@
-# Fodinha, Ludo, Dobble, Uno, Forca & Mímica
+# Fodinha, Ludo, Dobble, Uno, Forca, Mímica, Monopoly & Banco Imobiliário
 
 Jogos de mesa multiplayer em Next.js + PartyServer (Cloudflare Workers/Durable Objects) + Supabase (login). Depois do login,
 `/lobby` é o menu onde se escolhe o jogo:
@@ -11,12 +11,15 @@ Jogos de mesa multiplayer em Next.js + PartyServer (Cloudflare Workers/Durable O
 | Uno | `/lobby/uno` | `/uno/[sala]` (binding `Uno`, `party/uno.ts`) |
 | Forca | `/lobby/forca` | `/forca/[sala]` (binding `Forca`, `party/forca.ts`) |
 | Mímica Love Songs | `/lobby/mimica` | `/mimica/[sala]` (binding `Mimica`, `party/mimica.ts`) |
+| Monopoly | `/lobby/monopoly` | `/monopoly/[sala]` (binding `Monopoly`, `party/monopoly.ts`) |
+| Banco Imobiliário | `/lobby/banco` | `/banco/[sala]` (binding `Banco`, `party/monopoly.ts`) |
 
-Ludo, Dobble, Uno e Forca têm "Contra Bots": é uma sala comum do servidor com a URL
-`?bots=3&level=hard&color=red` (Ludo), `?bots=3&level=hard&mode=tower` (Dobble), `?bots=3&level=hard` (Uno) ou
-`?bots=3&level=hard&rounds=5` (Forca) — o dono da sala monta e começa a partida sozinho, e o servidor joga
-pelos bots (como o Modo Teste da Fodinha).
-A **Mímica Love Songs** não tem bots, e a call é do próprio jogo: videochamada WebRTC dentro da sala (ver
+Ludo, Dobble e Uno têm "Contra Bots": é uma sala comum do servidor com a URL
+`?bots=3&level=hard&color=red` (Ludo), `?bots=3&level=hard&mode=tower` (Dobble) ou `?bots=3&level=hard` (Uno) — o dono
+da sala monta e começa a partida sozinho, e o servidor joga pelos bots (como o Modo Teste da Fodinha).
+A **Forca** não tem bots: quem escolhe a palavra da rodada é uma pessoa (digitando), e a dica é falada numa call.
+**Monopoly** e **Banco Imobiliário** também têm "Contra Bots": `?bots=3&level=hard&limit=40` (limit = rodadas; sem ele, até a falência).
+A **Mímica Love Songs** também não tem bots, e a call é do próprio jogo: videochamada WebRTC dentro da sala (ver
 [Videochamada](#videochamada-mímica)).
 
 ## Rodando
@@ -24,12 +27,12 @@ A **Mímica Love Songs** não tem bots, e a call é do próprio jogo: videochama
 ```bash
 cp .dev.vars.example .dev.vars   # uma vez: SUPABASE_URL e SUPABASE_ANON_KEY do Worker (mesmo projeto do .env.local)
 npm run dev            # Next em :3000
-npm run party:dev      # room servers (Fodinha + Ludo + Dobble + Uno + Forca + Mímica) em :1999 — `wrangler dev`
+npm run party:dev      # room servers (Fodinha + Ludo + Dobble + Uno + Forca + Mímica + Monopoly + Banco) em :1999 — `wrangler dev`
 npm test               # vitest
 npm run typecheck:worker   # tipos do Worker (o `tsc` da raiz é o do navegador)
 ```
 
-Os seis jogos rodam no MESMO Worker (`worker/index.ts`, configurado em `wrangler.jsonc`): um Durable Object
+Os oito jogos rodam no MESMO Worker (`worker/index.ts`, configurado em `wrangler.jsonc`): um Durable Object
 por jogo, uma instância por sala. O nome do binding é o segmento da URL (`/parties/ludo/ABCD`), então o código de
 sala de um jogo nunca colide com o de outro. O cliente acha o Worker por `NEXT_PUBLIC_PARTY_HOST`
 (o nome antigo `NEXT_PUBLIC_PARTYKIT_HOST` ainda vale como reserva).
@@ -43,8 +46,10 @@ acontece sozinho) → room server fino → telas.
   barreira, três 6 perdem a vez, chegada exata. Dobble: baralho de 55 cartas (plano projetivo de
   ordem 7 — duas cartas quaisquer têm UM símbolo em comum), modos Torre e Poço, castigo por erro. Uno: 108 cartas,
   Pular/Inverter/+2/Coringa/+4 (o +4 só sem a cor atual na mão — o servidor confere), comprar e jogar, gritar UNO e
-  ser pego por quem viu. Forca: o servidor sorteia a palavra (com categoria de dica), vidas compartilhadas, a vez
-  passa a cada chute, chute da palavra inteira custa 2 vidas se errar, 25 s por jogada com chute automático. Mímica (2 a 8 pessoas): a cada turno
+  ser pego por quem viu. Forca (2 a 4 pessoas): a cada rodada uma pessoa escolhe a palavra ou frase digitando (sem
+  categoria), as outras chutam e dividem UM boneco de 10 partes (cabeça, tronco, braços, pernas, olhos, nariz, boca e
+  o chapéu por último), a vez passa a cada chute, chute da palavra inteira custa 2 partes se errar, 40 s por jogada
+  com chute automático, e o escolhedor ganha 10 por parte desenhada se a mesa acertar (nada se o boneco fechar). Mímica (2 a 8 pessoas): a cada turno
   uma pessoa recebe uma carta de 4 músicas — 3 do Brasil e 1 internacional, sorteadas de 600 (300 do Brasil e 300 do mundo dos últimos ~40 anos — muita MPB e rock nacional,
   pagode, axé, sertanejo, hits dos anos 80/90/2000 e de hoje —, curadas por década e conferidas nos totais do Spotify; veja o
   cabeçalho de `src/lib/mimica/songs.ts` pra como foram escolhidas e como trocar uma) — e escolhe uma em 25 s; faz a mímica por 90 s enquanto as outras
@@ -70,15 +75,58 @@ acontece sozinho) → room server fino → telas.
 - Uno e Forca guardam segredo, cada um do seu jeito. **Uno**: a mão de cada jogador só vai pra ele — a base `GameRoom`
   tem `perViewer()` + `stateMessage(state, viewer)` e manda UMA mensagem por conexão (`toView(state, viewerId)`: a
   própria mão e o que dá pra jogar; dos outros só a contagem; o monte nunca sai do servidor). **Forca**: a palavra só
-  existe no servidor — `toView` manda o padrão com as letras já chutadas e a palavra inteira só depois que a rodada
-  acaba (a vez e o prazo usam o relógio do servidor, como no Dobble).
+  existe no servidor — também por pessoa: `toView(state, viewerId)` manda o padrão com as letras já chutadas, a
+  palavra inteira só pra quem escolheu e, pra todo mundo, depois que a rodada acaba (a vez e o prazo usam o relógio
+  do servidor, como no Dobble). Sala salva no formato antigo volta pro lobby em vez de quebrar.
 - `src/lib/party/usePartyRoom.ts` — conexão com a sala (token, join, códigos de fechamento) usada
   pelas telas dos dois jogos; `src/components/ConnectionProblem.tsx` é o painel de "não conectou".
 - `src/components/ludo/`, `dobble/`, `uno/` e `forca/` — UI: tabuleiro em SVG com peões animados casa a
   casa e dado 3D (Ludo); cartas circulares com 8 emojis, castigo, carta voando pro vencedor (Dobble); mão em leque,
-  monte, pilha com a cor valendo e seletor de cor do Coringa (Uno); forca em SVG que vai se desenhando, palavra
-  que se revela, teclado A–Z (e o do computador) e barra do tempo da vez (Forca);
+  monte, pilha com a cor valendo e seletor de cor do Coringa (Uno); forca em SVG que vai se desenhando (o boneco ganha rosto e chapéu), campo pra escolher a palavra, palavra/frase que se revela, teclado A–Z (e o do computador) e barra do tempo da vez (Forca);
   sons sintetizados (`src/lib/audio.ts`) e layout por container query (retrato/paisagem).
+
+## Monopoly e Banco Imobiliário
+
+Um **motor só** (`src/lib/monopoly/`), duas **edições** em dados (`editions/`): cada edição tem o próprio binding/servidor
+(`/parties/monopoly/<sala>` e `/parties/banco/<sala>` — o mesmo código de sala em cada jogo é uma sala diferente), prefixo
+de histórico (`MONOPOLY:` / `BANCO:`), lobby e rota de partida.
+
+| | Monopoly | Banco Imobiliário |
+| --- | --- | --- |
+| Tabuleiro | clássico americano (Mediterranean Avenue ... Boardwalk) | bairros do Rio e de São Paulo (Leblon, Av. Paulista, Ipanema, Morumbi...) |
+| Dinheiro / salário | $1.500 / $200 | R$ 2.500 / R$ 200 |
+| Casa livre recusada | **leilão** entre todos | a propriedade só fica livre (**sem leilão**) |
+| Cartas | Sorte + Caixa Comunitária (16 + 16) | um baralho só, "Sorte ou Revés" (24); "Habeas Corpus" sai da prisão |
+| Transportes | 4 ferrovias (25/50/100/200) + 2 serviços (4×/10× os dados) | 6 companhias (25 ... 400 pela quantidade) |
+| Casa especial | Taxa de Luxo | "Lucros ou Dividendos" (+R$ 100) |
+
+As ruas ficam nas mesmas casas e têm a mesma economia (preço, aluguel por casa, custo da casa) nas duas — o equilíbrio é o do
+Monopoly clássico. Os nomes dos bairros e das companhias do Banco Imobiliário seguem o tabuleiro clássico; os **valores** (preços,
+aluguéis, cartas) são uma adaptação equilibrada, não uma cópia do jogo de caixa. Regras: construir só com o grupo de cor inteiro e
+**parelho** (o banco tem 32 casas e 12 hotéis), hipoteca (metade; tirar custa +10%), prisão (fiança, carta ou dupla; 3 duplas seguidas
+vão pra prisão), dívida (vende casas/hipoteca ou declara falência: tudo vai pro credor), trocas (dinheiro, propriedades e cartas nos dois
+sentidos, sem construção no grupo), desistir, e **duração**: até a falência ou 20/40 rodadas (acabou? vence o maior patrimônio).
+Quando só sobram bots, a partida acaba por patrimônio. Os bots não propõem trocas (mas respondem às suas).
+
+- `engine.ts` — as regras, puras. Cada ação devolve `{ok, state}` ou `{ok:false, error}` e é testada por `engine.*.test.ts` (regras, cartas, leilão,
+  construção/hipoteca, trocas, dívida/falência/limite, ações) mais um **fuzzer** (`engine.fuzz.test.ts`: milhares de ações aleatórias legais conferindo
+  invariantes — dinheiro nunca negativo, construção só com o grupo inteiro e parelha, estoque do banco, cartas conservadas, `step` coerente com
+  `debt`/`auction`). `actionsFor(state, id)` diz o que cada pessoa pode fazer agora; a tela e os bots usam isso (`view.me`).
+- `bot.ts` (fácil/médio/difícil: compra, lances, construção, dívida, resposta a trocas), `controller.ts` (permissões + o que acontece sozinho:
+  bots, desconectado vira bot, leilão e troca automáticos), `protocol.ts`, `feed.ts` (histórico), `summary.ts`/`labels.ts` (textos), `geometry.ts`
+  (as 40 casas num grid 11×11 e o caminho da peça).
+- `party/monopoly.ts` — `MonopolyRoom` e `BancoRoom` (a mesma classe base, uma por edição). Estado por pessoa (`view.me`); o baralho nunca sai do servidor.
+- `src/components/monopoly/` — tabuleiro (peças que andam casa a casa, dados, carta tirada no miolo), painéis, leilão, dívida, propriedades
+  (construir/hipotecar), trocas, lobby, regras. `monopoly.css` mede o palco e o tabuleiro vira o maior quadrado que cabe.
+- O servidor aceita `MONOPOLY_SPEED` / `BANCO_SPEED` nos testes ponta a ponta.
+
+## Temas
+
+`src/lib/themes.ts` é o registro único (ícone, rótulo, fundo, camada escura, versos de carta, bordas, grupo). 23 temas em 3 grupos: Clássicos (os 11 de
+sempre), **Hora de Aventura** (Bubbline, Finn & Jake, BMO, Reino de Gelo, Marceline, Reino do Fogo) e Mais temas (Espaço, Neon, Floresta, Praia,
+Halloween, Arcade). Os 12 novos são ilustrações em SVG autorais (`public/themes/bg_*.svg` e `card_back_*.svg`) — pra trocar por uma foto basta
+apontar `bg`/`cardBacks` da entrada pra outro arquivo. Tema novo = soltar os arquivos em `public/themes/` e acrescentar UMA entrada em `DEFS`
+(`src/lib/themes.test.ts` confere ids, arquivos e SVGs).
 
 ## Feedback da partida (igual nos cinco jogos)
 
@@ -90,7 +138,7 @@ acontece sozinho) → room server fino → telas.
 - **Fim de partida** (`src/components/GameOverPanel.tsx`, `src/lib/gameResult.ts`): o texto fala com quem olha
   (venceu / ficou em Nº lugar / assistia), a própria linha fica em destaque e cada linha traz as
   estatísticas da partida (Ludo: capturas e seis; Dobble: rodadas ganhas e melhor tempo; Fodinha: acertos; Uno: cartas
-  jogadas/compradas, pegadas e UNOs esquecidos; Forca: letras certas, erros e palavras completadas).
+  jogadas/compradas, pegadas e UNOs esquecidos; Forca: letras certas, erros, palavras completadas, escolhidas e as que ninguém acertou).
 - **Vez fora da aba** (`src/lib/useTurnAlert.ts`): com a aba escondida, o título pisca "🔔 Sua vez!".
 - **Som**: os cinco jogos usam o mesmo liga/desliga (`src/lib/audio.ts`).
 - Ludo: dado grande no centro do tabuleiro, rastro da última jogada, prévia do caminho e peça "fantasma"
@@ -139,7 +187,7 @@ salas fazem o mesmo quando não conseguem conectar: o painel nomeia o serviço q
 | --- | --- | --- |
 | Regras (funções puras) | cada regra de cada jogo, inclusive os cantos (barreiras, três 6, manilhas, castigo no Dobble, +4 só sem a cor, UNO esquecido, acento na Forca) | `src/lib/game`, `src/lib/ludo/engine*.test.ts`, `src/lib/dobble/engine.test.ts`, `src/lib/uno/engine.test.ts`, `src/lib/forca/engine.test.ts` |
 | Propriedades e simulações | partidas INTEIRAS jogadas ao acaso (de 2 a 8 mesas) conferindo as invariantes a cada passo: cartas únicas, contas das vazas, tabuleiro válido, partida sempre termina, mesma semente = mesma partida | `simulation.test.ts`, `rules.properties.test.ts` |
-| IA dos bots | prioridades (chegar em casa, capturar, fugir do perigo, gritar UNO, usar a lista de palavras) e que nunca escolhem jogada ilegal | `src/lib/*/bot.test.ts`, `src/lib/dobble/controller.test.ts` |
+| IA dos bots | prioridades (chegar em casa, capturar, fugir do perigo, gritar UNO) e que nunca escolhem jogada ilegal | `src/lib/*/bot.test.ts`, `src/lib/dobble/controller.test.ts` |
 | Controladores | permissões (host, vez), timers dos bots, contagem regressiva, pausa — com um relógio manual, sem esperar | `src/lib/*/controller.test.ts` |
 | Room servers | integração de verdade: conexões e mensagens de mentira contra o servidor real, com um Supabase de mentira (login, restauração do banco, histórico, reconexão, expulsão, sigilo: a mão do Uno e a palavra da Forca não chegam a quem não pode ver) | `party/*.test.ts` (`party/test-utils.ts` é o kit) |
 | Telas (sem navegador) | cartas, dado, tabuleiro, histórico, fim de partida e medidor de apostas renderizados no servidor: quais peças são clicáveis, o que aparece em cada estado | `src/components/**/*.test.tsx` |
@@ -151,10 +199,37 @@ Um novo jogo com salas herda de `GameRoom` (`party/game-room.ts`) e ganha o cont
 
 ## Teste ponta a ponta
 
-Os room servers aceitam `LUDO_SPEED` / `DOBBLE_SPEED` / `UNO_SPEED` / `FORCA_SPEED` / `MIMICA_SPEED` (dividem todas as esperas dos bots e
+Os room servers aceitam `LUDO_SPEED` / `DOBBLE_SPEED` / `UNO_SPEED` / `FORCA_SPEED` / `MIMICA_SPEED` / `MONOPOLY_SPEED` / `BANCO_SPEED` (dividem todas as esperas dos bots e
 das animações; em produção não existem) pra partidas inteiras rodarem em minutos:
 `npx wrangler dev --port 1999 --var LUDO_SPEED:8 --var DOBBLE_SPEED:8 --var UNO_SPEED:8 --var FORCA_SPEED:8 --var MIMICA_SPEED:8`
 (um Supabase de mentira também entra por aqui: `--var SUPABASE_URL:http://localhost:4010`, que vale mais que o `.dev.vars`).
+
+### Suíte E2E do Monopoly / Banco Imobiliário (`e2e/`)
+
+Sobe a pilha de verdade sem credenciais: um Supabase de mentira (`:4010`, reconhece o token `user:<nome>`), o `wrangler dev` (`:1999`),
+o `next dev` (`:3000`) e navegadores de verdade (Puppeteer + o Chrome do sistema — `CHROME_PATH` muda o caminho), um por pessoa, já "logados"
+com uma sessão falsa. Nada de senha, nada de produção.
+
+```bash
+npm run e2e                               # tudo (= node e2e/run.cjs) (uns 10 min)
+node e2e/run.cjs menu errors server    # só essas
+node e2e/run.cjs solo multi layout     # as duas edições
+SPEED=12 node e2e/run.cjs solo-banco   # esperas dos bots ÷12
+node e2e/stack.cjs                     # só sobe a pilha (pra abrir o jogo à mão / investigar uma falha)
+```
+
+| Suíte | O que prova |
+| --- | --- |
+| `menu` | o menu tem os 8 jogos; lobby de cada edição (bots, dificuldade, duração, criar/entrar por código, regras); o seletor de 23 temas troca o fundo e guarda a escolha |
+| `server` | WebSocket cru: login (4001), as duas edições separadas, permissões (host, vez, etapa), entradas lixo, expulsão, espectador e uma **maratona** de 6 salas jogando partidas inteiras sem uma ação recusada |
+| `solo-*` | uma pessoa jogando PELA TELA contra bots do primeiro lance ao fim e à revanche; a tela concorda com o servidor (dinheiro, peças, donos, casas, dados, vez) a cada conferência; histórico gravado |
+| `multi-*` | duas pessoas + bot: lobby/host/expulsar, trocas (propor, recusar, cancelar, aceitar), hipoteca, leilão (ou "não comprar" no Banco), espectador, recarregar, reação, cair da conexão (bot assume) e voltar, desistir, fim de jogo e voltar pra sala |
+| `layout-*` | 8 tamanhos de tela (monitor, meia tela, celular em pé/deitado, "site desktop"): nada vaza, o tabuleiro é um quadrado inteiro, peças dentro dele, botão principal visível e clicável (`elementFromPoint`); PNGs em `e2e/out/` |
+| `errors` | sem login, portão do site, login recusado pelo servidor de jogo, código em minúsculas |
+
+Pré-requisitos: Chrome instalado e as portas 3000/1999/4010 livres (a suíte mata o que estiver nelas e **apaga `.next`** — o Next guarda em cache o que
+embutiu de `NEXT_PUBLIC_*`). O Puppeteer vem como dependência transitiva (versão antiga: nada de recursos novos nos scripts). Uma falha de
+compilação do Next aparece nos testes como "timeout esperando a tela": rode `node e2e/stack.cjs` e abra a página pra ver o erro.
 
 ## Deploy do servidor de jogo (Cloudflare)
 
@@ -172,7 +247,7 @@ Depois, na Vercel, defina `NEXT_PUBLIC_PARTY_HOST=fodinha-party.<subdominio>.wor
 um novo deploy do Next (variáveis `NEXT_PUBLIC_*` são embutidas no build). O PartyKit antigo continua de pé até
 você apagá-lo, então voltar atrás é só restaurar a variável. Nada de dados a migrar: as salas são efêmeras e o
 histórico fica no Supabase. Ao adicionar um jogo novo: classe em `worker/index.ts`, binding em `wrangler.jsonc` e uma
-migração NOVA (`v2`...) listando a classe — nunca edite a `v1` depois do deploy. A `Mimica` já está na `v2`; o próximo jogo vai na `v3`.
+migração NOVA (`v2`...) listando a classe — nunca edite a `v1` depois do deploy. A `Mimica` está na `v2` e `Monopoly` + `Banco` na `v3`; o próximo jogo vai na `v4`.
 
 ---
 

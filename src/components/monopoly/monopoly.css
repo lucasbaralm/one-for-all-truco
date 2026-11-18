@@ -1,0 +1,333 @@
+/* ── Monopoly / Banco Imobiliário ─────────────────────────────────────────────
+   Mesma ideia dos outros jogos: o palco mede o espaço que sobrou e o tabuleiro vira o maior
+   quadrado que cabe (--s); tudo o mais (fontes, peças, dados) é múltiplo dele.
+   • Retrato: tabuleiro em cima, ações no meio, faixa dos jogadores embaixo.
+   • Paisagem (palco bem mais largo que alto): jogadores + histórico à esquerda, ações à direita. */
+/* --s (o lado do tabuleiro) usa unidades de container (cqw/cqh): como propriedade REGISTRADA ela vira um comprimento
+   já resolvido no .mono-layout. Sem isso cada descendente a recalcularia contra o container mais próximo dele (o próprio
+   tabuleiro, que só mede a largura) e dados, logo e peças sairiam menores que o previsto. */
+@property --s {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 240px;
+}
+
+.mono-stage {
+  container-type: size;
+  display: grid;
+  place-items: center;
+  flex: 1 1 0%;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+.mono-layout {
+  --gap: 0.5rem;
+  --s: max(15rem, min(100cqw, calc(100cqh - 15.5rem)));
+  display: grid;
+  gap: var(--gap);
+  width: min(100cqw, max(var(--s), 26rem));
+  height: 100cqh;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: var(--s) minmax(0, 1fr) auto;
+  grid-template-areas:
+    "board"
+    "actions"
+    "players";
+}
+
+.mono-players {
+  grid-area: players;
+  display: flex;
+  gap: 0.4rem;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0.1rem 0.1rem 0.25rem;
+  justify-content: safe center;
+}
+.mono-actions {
+  grid-area: actions;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.mono-feed {
+  display: none;
+}
+
+@container (min-aspect-ratio: 13/10) {
+  .mono-layout {
+    /* celular deitado: o tabuleiro encolhe até caber (mínimo 10rem) em vez de passar da tela */
+    --s: max(10rem, min(100cqh, calc(100cqw - 2 * 13rem - 2 * var(--gap))));
+    --pw: clamp(13rem, calc((100cqw - var(--s)) / 2 - var(--gap)), 22rem);
+    width: calc(var(--s) + 2 * var(--pw) + 2 * var(--gap));
+    height: min(100cqh, max(var(--s), 28rem));
+    grid-template-columns: var(--pw) var(--s) var(--pw);
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "players board actions";
+  }
+  .mono-players {
+    flex-direction: column;
+    overflow-x: visible;
+    overflow-y: auto;
+    justify-content: flex-start;
+    padding: 0.1rem 0.15rem;
+    min-height: 0;
+  }
+  .mono-feed {
+    display: flex;
+    flex: 1 1 0%;
+    min-height: 0;
+    flex-direction: column;
+    justify-content: flex-end;
+    pointer-events: none;
+  }
+}
+
+/* ── tabuleiro ─────────────────────────────────────────────────────────────── */
+.mono-board {
+  grid-area: board;
+  position: relative;
+  width: var(--s);
+  height: var(--s);
+  justify-self: center;
+  align-self: start;
+  container-type: inline-size;
+  border-radius: 0.6rem;
+  font-size: calc(var(--s) * 0.0148);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+}
+.mono-grid {
+  position: absolute;
+  inset: 2px;
+  display: grid;
+  grid-template-columns: 1.5fr repeat(9, 1fr) 1.5fr;
+  grid-template-rows: 1.5fr repeat(9, 1fr) 1.5fr;
+  border-radius: 0.4rem;
+  overflow: hidden;
+}
+.mono-center {
+  grid-area: 2 / 2 / 11 / 11;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--s) * 0.012);
+  overflow: hidden;
+  --die: calc(var(--s) * 0.082);
+  padding: calc(var(--s) * 0.02);
+  outline: 1px solid rgba(0, 0, 0, 0.35);
+  outline-offset: -0.5px;
+}
+
+.mono-sq {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  text-align: center;
+  outline: 1px solid rgba(0, 0, 0, 0.45);
+  outline-offset: -0.5px;
+  transition: filter 0.2s;
+}
+.mono-sq:hover {
+  filter: brightness(1.07);
+  z-index: 3;
+}
+.mono-sq[data-inner="top"] { flex-direction: column; }
+.mono-sq[data-inner="bottom"] { flex-direction: column-reverse; }
+.mono-sq[data-inner="right"] { flex-direction: row-reverse; }
+.mono-sq[data-inner="left"] { flex-direction: row; }
+
+.mono-band {
+  flex: 0 0 22%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8%;
+  min-width: 0;
+  min-height: 0;
+  outline: 1px solid rgba(0, 0, 0, 0.4);
+  outline-offset: -0.5px;
+}
+.mono-sq[data-inner="left"] .mono-band,
+.mono-sq[data-inner="right"] .mono-band {
+  flex-basis: 26%;
+  flex-direction: column;
+}
+.mono-house {
+  width: 0.78em;
+  height: 0.78em;
+  background: #16a34a;
+  border: 1px solid #14532d;
+  border-radius: 1px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.4);
+}
+.mono-hotel {
+  width: 1.9em;
+  height: 0.9em;
+  background: #dc2626;
+  border: 1px solid #7f1d1d;
+  border-radius: 2px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.4);
+}
+.mono-sq[data-inner="left"] .mono-hotel,
+.mono-sq[data-inner="right"] .mono-hotel {
+  width: 0.9em;
+  height: 1.9em;
+}
+
+.mono-sq-body {
+  flex: 1 1 0%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.12em;
+  min-width: 0;
+  min-height: 0;
+  padding: 0.18em;
+  line-height: 1.05;
+}
+.mono-sq-icon {
+  font-size: 1.7em;
+  line-height: 1;
+}
+.mono-sq-name {
+  font-size: 0.78em;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.mono-sq-price {
+  font-size: 0.78em;
+  font-weight: 700;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+.mono-sq[data-side="corner"] .mono-sq-icon {
+  font-size: 2.6em;
+}
+.mono-sq[data-side="corner"] .mono-sq-name {
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  /* "ESTACIONAMENTO" não pode quebrar no meio da palavra */
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.mono-sq[data-mortgaged="true"] {
+  filter: saturate(0.25) brightness(0.92);
+  background-image: repeating-linear-gradient(135deg, transparent 0 0.35em, rgba(0, 0, 0, 0.16) 0.35em 0.6em);
+}
+.mono-mortgaged {
+  position: absolute;
+  right: 0.15em;
+  top: 0.15em;
+  display: grid;
+  place-items: center;
+  width: 1.5em;
+  height: 1.5em;
+  border-radius: 50%;
+  background: #b91c1c;
+  color: #fff;
+  font-size: 0.8em;
+  font-weight: 900;
+}
+.mono-sq[data-active="true"] {
+  z-index: 4;
+  animation: mono-glow 0.9s ease-in-out infinite alternate;
+}
+@keyframes mono-glow {
+  from { box-shadow: inset 0 0 0 0.2em #facc15, 0 0 0.6em 0.1em rgba(250, 204, 21, 0.6); }
+  to { box-shadow: inset 0 0 0 0.35em #facc15, 0 0 1.2em 0.3em rgba(250, 204, 21, 0.9); }
+}
+
+/* Palco pequeno (celular em pé ou deitado): o tabuleiro é menor, então a letra relativa sobe — o preço continua legível. */
+@container (max-width: 35rem) {
+  .mono-board { font-size: calc(var(--s) * 0.02); }
+}
+@container (max-height: 26rem) {
+  .mono-board { font-size: calc(var(--s) * 0.02); }
+}
+
+/* Tabuleiro pequeno (celular): só ícone e preço — o nome vem tocando na casa. */
+@container (max-width: 31rem) {
+  .mono-sq-name { display: none; }
+  .mono-sq[data-side="corner"] .mono-sq-name { display: -webkit-box; font-size: 0.7em; }
+  .mono-sq-icon { font-size: 2.1em; }
+  .mono-sq-price { font-size: 0.95em; }
+}
+
+/* ── peças ─────────────────────────────────────────────────────────────────── */
+.mono-tokens {
+  position: absolute;
+  inset: 2px;
+  pointer-events: none;
+}
+.mono-token {
+  position: absolute;
+  --tk: calc(var(--s) * 0.046);
+  width: var(--tk);
+  height: var(--tk);
+  margin-left: calc(var(--tk) / -2);
+  margin-top: calc(var(--tk) / -2);
+  display: grid;
+  place-items: center;
+  border: calc(var(--s) * 0.0045) solid;
+  border-radius: 50%;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.55);
+}
+.mono-token-emoji {
+  font-size: calc(var(--tk) * 0.62);
+  line-height: 1;
+}
+.mono-token-lock {
+  position: absolute;
+  right: -22%;
+  top: -22%;
+  width: 46%;
+  height: 46%;
+  padding: 8%;
+  border-radius: 50%;
+  background: #111827;
+  color: #fde68a;
+}
+.mono-token-ring {
+  position: absolute;
+  inset: -28%;
+  border: 2px solid;
+  border-radius: 50%;
+  animation: mono-ping 1.2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@keyframes mono-ping {
+  0% { transform: scale(0.85); opacity: 0.95; }
+  80%, 100% { transform: scale(1.35); opacity: 0; }
+}
+
+/* carta tirada (Sorte / Caixa Comunitária) no miolo do tabuleiro */
+.mono-card {
+  width: 82%;
+  border-radius: 0.8rem;
+  border: 3px solid #fff;
+  padding: 0.55rem 0.7rem;
+  text-align: center;
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mono-token-ring, .mono-sq[data-active="true"] { animation: none; }
+}

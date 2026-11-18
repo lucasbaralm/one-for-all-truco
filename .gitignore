@@ -50,3 +50,6 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# saídas dos testes ponta a ponta (capturas de tela)
+/e2e/out/
